@@ -1,8 +1,12 @@
-//! NexusAkari Pro (v4) — Safe Automation Finite State Machine
-//! Includes Anti-Friendly-Ban Intent Guard, Gaussian Humanized Jitter,
-//! ARAM <5ms Bench Diff Sniper with Rollback Lock, and :2999 LiveClientData Poller.
+//! NexusAkari Pro (v4) — Safe Automation Finite State Machine,
+//! Anti-Friendly-Ban Intent Guard, ARAM <5ms Bench Diff Sniper with Rollback Lock,
+//! Lobby Chat Zero-Width Obfuscated Broadcaster, and :2999 LiveClientData Poller.
 
+use crate::lcu_connector::{IpcEnvelope, IpcRingBuffer, LcuRcuCredentials, LcuRestClient};
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +35,17 @@ pub struct BanArbitrationDecision {
     pub skipped_teammate_intents: Vec<i32>,
     pub applied_jitter_ms: u64,
     pub audit_log: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Live2999EnemySpellState {
+    pub summoner_name: String,
+    pub champion_name: String,
+    pub has_cosmic_insight: bool,
+    pub has_ionian_boots: bool,
+    pub total_spell_haste: u32,
+    pub flash_real_cooldown_sec: u32,
 }
 
 /// Arbitrates which champion to ban in Champion Select while guaranteeing we NEVER ban
@@ -80,7 +95,6 @@ pub fn diff_aram_bench_pool(
     if !config.aram_bench_sniper_enabled {
         return None;
     }
-    // If current champion is already higher priority in wishlist, do not swap away
     let current_rank = config
         .aram_wishlist_champion_ids
         .iter()
@@ -93,11 +107,206 @@ pub fn diff_aram_bench_pool(
             }
         }
         if bench_champion_ids.contains(&wish_id) {
-            // Returns (target_swap_champion_id, rollback_previous_champion_id)
             return Some((wish_id, current_champion_id));
         }
     }
     None
+}
+
+/// Calculates real summoner spell cooldown in seconds accounting for Cosmic Insight (+18) and Ionian Boots (+10).
+pub fn calculate_spell_haste_cooldown(
+    base_cd_sec: u32,
+    has_cosmic_insight: bool,
+    has_ionian_boots: bool,
+) -> (u32, u32) {
+    let haste = (if has_cosmic_insight { 18 } else { 0 }) + (if has_ionian_boots { 10 } else { 0 });
+    let real_cd = ((base_cd_sec as f64) / (1.0 + (haste as f64) / 100.0)).round() as u32;
+    (haste, real_cd)
+}
+
+/// Inserts zero-width spaces (`\u{200B}`) and converts sensitive words to compliant tactical terms
+/// so lobby chat reports are never blocked by client profanity filters.
+pub fn obfuscate_lobby_chat_line(raw: &str) -> String {
+    let sanitized = raw
+        .replace("牛马", "高危波动")
+        .replace("混子", "低转化蓝领")
+        .replace("秒退", "规避重开")
+        .replace("连败", "状态低迷");
+    sanitized
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\u{200B}")
+}
+
+/// Executes delayed ReadyCheck Auto-Accept (`POST /lol-matchmaking/v1/ready-check/accept`),
+/// Auto-Reconnect (`POST /lol-gameflow/v1/reconnect`), or Auto Play-Again (`POST /lol-lobby/v2/play-again`).
+pub async fn execute_lifecycle_automation_action(
+    lcu: &LcuRestClient,
+    creds: &LcuRcuCredentials,
+    config: &AutomationConfig,
+    phase: &str,
+    ring_buffer: &IpcRingBuffer,
+) -> Result<String, String> {
+    match phase {
+        "ReadyCheck" if config.auto_accept_enabled => {
+            if config.auto_accept_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(config.auto_accept_delay_ms)).await;
+            }
+            lcu.lcu_request(
+                creds,
+                Method::POST,
+                "/lol-matchmaking/v1/ready-check/accept",
+                None,
+                ring_buffer,
+            )
+            .await?;
+            Ok(format!(
+                "Accepted ReadyCheck after {}ms anti-misclick delay",
+                config.auto_accept_delay_ms
+            ))
+        }
+        "Reconnect" if config.auto_reconnect_enabled => {
+            lcu.lcu_request(
+                creds,
+                Method::POST,
+                "/lol-gameflow/v1/reconnect",
+                None,
+                ring_buffer,
+            )
+            .await?;
+            Ok("Triggered automatic gameflow reconnect".to_string())
+        }
+        "EndOfGame" if config.auto_play_again_enabled => {
+            lcu.lcu_request(
+                creds,
+                Method::POST,
+                "/lol-lobby/v2/play-again",
+                None,
+                ring_buffer,
+            )
+            .await?;
+            Ok("Skipped post-game honor and returned to lobby".to_string())
+        }
+        _ => Ok(format!("No automation action required for phase {}", phase)),
+    }
+}
+
+/// Broadcasts obfuscated tactical report lines to the active Champion Select conversation
+/// with a strict 350ms/line rate limit to prevent client chat throttling.
+pub async fn broadcast_obfuscated_lobby_chat(
+    lcu: &LcuRestClient,
+    creds: &LcuRcuCredentials,
+    conversation_id: &str,
+    lines: &[String],
+    ring_buffer: &IpcRingBuffer,
+) -> Result<usize, String> {
+    let endpoint = format!("/lol-chat/v1/conversations/{}/messages", conversation_id);
+    let mut delivered = 0;
+
+    for (idx, line) in lines.iter().enumerate() {
+        if idx > 0 {
+            tokio::time::sleep(Duration::from_millis(350)).await;
+        }
+        let body = json!({
+            "type": "chat",
+            "body": obfuscate_lobby_chat_line(line),
+        });
+        lcu.lcu_request(creds, Method::POST, &endpoint, Some(body), ring_buffer)
+            .await?;
+        delivered += 1;
+    }
+    Ok(delivered)
+}
+
+/// Polls Riot's In-Game LiveClientData API (`https://127.0.0.1:2999/liveclientdata/allgamedata`)
+/// and extracts enemy players' Ionian Boots (ID 3158) and Cosmic Insight spell haste status.
+pub async fn poll_live_client_2999(
+    lcu: &LcuRestClient,
+    ring_buffer: &IpcRingBuffer,
+) -> Result<Vec<Live2999EnemySpellState>, String> {
+    let url = "https://127.0.0.1:2999/liveclientdata/allgamedata";
+    let started = Instant::now();
+
+    let resp = lcu
+        .inner_client()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("LiveClientData :2999 unreachable: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let payload: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid :2999 JSON: {}", e))?;
+
+    let mut parsed_enemies = Vec::new();
+    if let Some(players) = payload.get("allPlayers").and_then(|v| v.as_array()) {
+        for p in players {
+            let summoner_name = p
+                .get("summonerName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string();
+            let champion_name = p
+                .get("championName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string();
+
+            let has_ionian_boots = p
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items.iter().any(|item| {
+                        item.get("itemID").and_then(|id| id.as_i64()) == Some(3158)
+                    })
+                })
+                .unwrap_or(false);
+
+            let has_cosmic_insight = p
+                .get("runes")
+                .and_then(|r| r.get("generalRunes"))
+                .and_then(|v| v.as_array())
+                .map(|runes| {
+                    runes
+                        .iter()
+                        .any(|r| r.get("id").and_then(|id| id.as_i64()) == Some(8347))
+                })
+                .unwrap_or(false);
+
+            let (total_spell_haste, flash_real_cooldown_sec) =
+                calculate_spell_haste_cooldown(300, has_cosmic_insight, has_ionian_boots);
+
+            parsed_enemies.push(Live2999EnemySpellState {
+                summoner_name,
+                champion_name,
+                has_cosmic_insight,
+                has_ionian_boots,
+                total_spell_haste,
+                flash_real_cooldown_sec,
+            });
+        }
+    }
+
+    ring_buffer
+        .push(IpcEnvelope {
+            id: format!("live2999-{}", chrono::Utc::now().timestamp_micros()),
+            timestamp: chrono::Utc::now().format("%H:%M:%S%.3f").to_string(),
+            channel: "LIVE_2999".to_string(),
+            method: "GET".to_string(),
+            endpoint: "/liveclientdata/allgamedata".to_string(),
+            status,
+            duration_ms: (elapsed_ms * 100.0).round() / 100.0,
+            payload_summary: format!("Synced {} active in-game players from :2999", parsed_enemies.len()),
+        })
+        .await;
+
+    Ok(parsed_enemies)
 }
 
 #[cfg(test)]
@@ -127,7 +336,6 @@ mod tests {
     #[test]
     fn test_safe_ban_skips_teammate_hovered_intent() {
         let cfg = sample_config();
-        // Teammate SUP hovers Blitzcrank (53); should skip 53 and lock K'Sante (897)
         let decision = arbitrate_safe_ban(&cfg, &[53, 145], &[]);
         assert_eq!(decision.selected_ban_champion_id, Some(897));
         assert_eq!(decision.skipped_teammate_intents, vec![53]);
@@ -136,13 +344,21 @@ mod tests {
     #[test]
     fn test_aram_bench_diff_sniper_and_priority_guard() {
         let cfg = sample_config();
-        // Currently holding Sona (37), bench rolls Jayce (126) and Jhin (202) -> snipes highest priority Jhin (202)
         let snipe = diff_aram_bench_pool(&cfg, 37, &[54, 126, 202]);
         assert_eq!(snipe, Some((202, 37)));
 
-        // If already holding Jhin (202, rank 0), will not swap to lower priority Jayce (126, rank 1)
         let no_swap = diff_aram_bench_pool(&cfg, 202, &[126, 81]);
         assert_eq!(no_swap, None);
     }
-}
 
+    #[test]
+    fn test_spell_haste_and_chat_obfuscation() {
+        let (haste, real_cd) = calculate_spell_haste_cooldown(300, true, true);
+        assert_eq!(haste, 28);
+        assert_eq!(real_cd, 234);
+
+        let obf = obfuscate_lobby_chat_line("遇到牛马建议秒退");
+        assert!(!obf.contains("牛马"));
+        assert!(obf.contains('\u{200B}'));
+    }
+}

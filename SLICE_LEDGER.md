@@ -1,41 +1,40 @@
 # NexusAkari Pro (v4) — 磁盘物理分母与原子切片追踪账本 (Disk Slice Ledger)
 
-- **锁定物理分母（Total Slices）**：`6`
-- **当前已完成且无简化的切片数（Completed Slices）**：`6 / 6` (`100.00%`)
-- **架构底座**：`Rust (src-tauri) + Tauri 2 (ACL & IPC Channel) + React 19 + TypeScript`
+- **锁定物理分母（Total Slices）**：`8`（含原计划 `Slice-1`～`Slice-6` 及代码审查后追加的桌面端硬核补完切片 `Slice-7`～`Slice-8`）
+- **当前已完成且无简化的切片数（Completed Slices）**：`7 / 8` (`87.50%`)
+- **架构底座**：`Rust (src-tauri: Tokio + Reqwest + Tungstenite + DashMap) + Tauri 2 + React 19 + TypeScript`
 
 ---
 
 ## 原子切片队列与状态明细
 
-### [x] Slice-1: v4 确定性数学引擎、三通道协议报文库与单元测试底座 (`已完成 1/6`)
-- **核心文件**：
-  - `/src/core/types.ts`：三通道（LCU + RCU/SGP + `:2999`）强类型契约、16 类牛马标签、胜率曲线葬送点、恩怨账本、战利品工坊与 Tauri 2 IPC 模型。
-  - `/src/core/mathEngine.ts`：8 大核心算法全量无简化实现。
-  - `/src/core/telemetryFixtures.ts`：全真 LCU/SGP/`:2999` 录制数据集、大区路由注册表、大乱斗平衡库、斗魂竞技场海克斯库、战利品库存与恩怨黑名单种子。
-  - `/src/core/mathEngine.test.ts`：`node:test` 全分支确定性单元测试（`5/5` 全通过）。
+### [x] Slice-1: v4 确定性数学引擎、三通道协议报文库与单元测试底座 (`已完成 1/8`)
+- **核心文件**：`/src/core/types.ts`、`/src/core/mathEngine.ts`、`/src/core/telemetryFixtures.ts`、`/src/core/mathEngine.test.ts`（`5/5` 全通过）。
 
-### [x] Slice-2: Rust + Tauri 2 (ACL & Channel) 原生内核与同构桥接/AI 审判网关 (`已完成 2/6`)
-- **核心文件**：
-  - `/src-tauri/Cargo.toml`、`/src-tauri/build.rs`、`/src-tauri/tauri.conf.json`、`/src-tauri/capabilities/default.json`
-  - `/src-tauri/src/main.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/sgp_client.rs`、`/src-tauri/src/automation.rs`（含 7 组 `#[cfg(test)]` 原生单元测试与零 Clippy 警告修复）
-  - `/.github/workflows/rust-tauri-ci.yml`：GitHub Actions 双端自动测试流水线（已移除无效 `unstable` feature 与 GUI 头文件阻塞，确保跨平台 `cargo test` 与 `cargo clippy` 极速通过）。
-  - `/src/core/rustKernelSources.ts`、`/src/bridge/tauriClient.ts`、`/server.ts`。
+### [x] Slice-2: 同构协议网关与 Gemini 3.8 Flash 赛后审判庭后端 (`已完成 2/8`)
+- **核心文件**：`/server.ts`、`/.github/workflows/rust-tauri-ci.yml`。
 
-### [x] Slice-3: 战术暗色工作台主框架、双阶段智能 BP 查房、秒退决策与聊天室脱敏广播台 (`已完成 3/6`)
-- **核心文件**：
-  - `/src/index.css`、`/src/components/TopBar.tsx`、`/src/components/LeftTelemetryRail.tsx`、`/src/components/SmartBpWorkspace.tsx`。
+### [x] Slice-3: 战术暗色工作台主框架、双阶段智能 BP 查房、秒退决策与聊天室脱敏广播台 (`已完成 3/8`)
+- **核心文件**：`/src/index.css`、`/src/components/TopBar.tsx`、`/src/components/LeftTelemetryRail.tsx`、`/src/components/SmartBpWorkspace.tsx`。
 
-### [x] Slice-4: 深度战绩穿透、胜率曲线 $P(\text{Win}\mid t)$ 葬送点取证、2D 峡谷坐标与 AI 审判庭 (`已完成 4/6`)
-- **核心文件**：
-  - `/src/components/MatchAnalyticsWorkspace.tsx`：实时胜率逻辑回归曲线 $P(\text{Win}\mid t)$ 与 Top 3 葬送点取证、2D 召唤师峡谷坐标事件热区图、Gemini 3.8 Flash 赛后审判庭、六维能力 SVG 雷达图、全场 10 人双经济转化率对比表、召唤师恩怨黑名单账本管理器。
+### [x] Slice-4: 深度战绩穿透、胜率曲线 $P(\text{Win}\mid t)$ 葬送点取证、2D 峡谷坐标与 AI 审判庭 (`已完成 4/8`)
+- **核心文件**：`/src/components/MatchAnalyticsWorkspace.tsx`。
 
-### [x] Slice-5: 极地大乱斗 5ms 秒抢（带回滚锁）与斗魂竞技场双人协同助手 (`已完成 5/6`)
-- **核心文件**：
-  - `/src/components/AramArenaWorkspace.tsx`：大乱斗备选席（Bench Pool）`< 5ms` 差分秒抢与原英雄一键回滚保护锁、全英雄 EHP 等效生命值倍率与净强度偏移透视表、斗魂竞技场棱彩/黄金/白银海克斯强化与双人组合流派协同矩阵。
+### [x] Slice-5: 极地大乱斗 5ms 秒抢（带回滚锁）与斗魂竞技场双人协同助手 (`已完成 5/8`)
+- **核心文件**：`/src/components/AramArenaWorkspace.tsx`。
 
-### [x] Slice-6: 客户端全能工具箱（`:2999` 闪现计时 + 战利品分解 + 跨区 OB）、Tauri 2 内核检视器与全链路验证 (`已完成 6/6`)
+### [x] Slice-6: 客户端全能工具箱（`:2999` 闪现计时 + 战利品分解 + 跨区 OB）与 Tauri 2 内核检视器 (`已完成 6/8`)
+- **核心文件**：`/src/components/ClientToolkitWorkspace.tsx`、`/src/components/TauriKernelInspector.tsx`、`/src/App.tsx`。
+
+### [x] Slice-7: Rust 原生 HTTPS/WAMP/看门狗网络层与 `:2999` 轮询全量补完 (`已完成 7/8`)
 - **核心文件**：
-  - `/src/components/ClientToolkitWorkspace.tsx`：`:2999` 敌方闪现急速折算倒计时器、海克斯战利品批量分解精粹工坊、SGP 跨区 OB 观战启动器、无皮村全皮肤背景替换、段位/挑战水晶伪装、5v5 训练房创建。
-  - `/src/components/TauriKernelInspector.tsx`：Tauri 2 Rust 源码检视器、ACL 权限矩阵与 IPC `RingBuffer` 实时监控台。
-  - `/src/App.tsx`：全工作区整合、高保真视觉资产与 Ultra Mode 真实浏览器验证。
+  - `/src-tauri/Cargo.toml`：引入 `reqwest` (`rustls-tls`)、`tokio-tungstenite` (`rustls-tls-webpki-roots`) 与 `futures-util`。
+  - `/src-tauri/src/lcu_connector.rs`：实现忽略自签名证书的 `LcuRestClient`、RCU `/entitlements/v1/token` RSO JWT 提取器、WAMP `[8, "OnJsonApiEvent"]` 报文解析器、异步 WebSocket 订阅循环 `spawn_wamp_subscriber_loop` 与 2 秒级 `spawn_pid_watchdog` 进程热重连看门狗。
+  - `/src-tauri/src/sgp_client.rs`：实现 `SgpHttpClient`、`DashMap` L1 缓存命中短路、15 req/s 令牌桶限流请求与 10 人并发 `batch_scout_players`。
+  - `/src-tauri/src/automation.rs`：实现 `:2999` 局内 `poll_live_client_2999` 实时轮询器（自动解析敌方明朗之靴 `3158` 与星界洞悉 `8347`）、自动接受/断线重连/赛后秒回房执行器与 350ms 节流零宽字符聊天室广播器。
+
+### [ ] Slice-8: Tauri 2 完整 IPC 命令路由、前端 `tauriClient.ts` 真实 `invoke` 双模分流与赛后符文真实收益拆解面板 (`待推进`)
+- **核心文件**：
+  - `/src-tauri/src/lib.rs`：汇总暴露全部 14 个原生内核 API 方法，对接 `LcuRestClient`、`SgpHttpClient` 与后台看门狗生命周期。
+  - `/src/bridge/tauriClient.ts`：补齐真正的 `if (isTauriNativeRuntime()) { return window.__TAURI_INTERNALS__.invoke(...); }` 原生 IPC 路由分支，消除假双模。
+  - `/src/components/MatchAnalyticsWorkspace.tsx` & `/src/core/rustKernelSources.ts`：补齐单局赛后“符文真实伤害/治疗/护盾收益拆解面板”，并将内核检视器源码同步为最新完整版。
