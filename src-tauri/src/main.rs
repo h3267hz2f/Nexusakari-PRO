@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    nexus_akari_pro_lib::run();
+    let _kernel_state = nexus_akari_pro_lib::create_kernel_state();
 }

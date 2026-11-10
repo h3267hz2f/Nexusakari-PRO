@@ -71,6 +71,12 @@ pub struct SgpSessionCache {
     pub limiter: Arc<TokenBucketLimiter>,
 }
 
+impl Default for SgpSessionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SgpSessionCache {
     pub fn new() -> Self {
         Self {
@@ -99,4 +105,31 @@ pub fn build_sgp_spectator_command(
         game_id,
         platform_id
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_token_bucket_acquires_and_tracks_balance() {
+        let limiter = TokenBucketLimiter::new(5.0, 10.0);
+        let remaining = limiter.acquire_one().await;
+        assert!(remaining >= 3.9 && remaining <= 4.1);
+        let avail = limiter.available_tokens().await;
+        assert_eq!(avail, 4);
+    }
+
+    #[test]
+    fn test_build_sgp_spectator_command_formatting() {
+        let cmd = build_sgp_spectator_command(
+            "D:\\WeGameApps\\英雄联盟\\LeagueClient\\",
+            "spectator.hn1.lol.qq.com",
+            8080,
+            "encKey9981",
+            784512098,
+            "HN1",
+        );
+        assert!(cmd.contains("spectator spectator.hn1.lol.qq.com:8080 encKey9981 784512098 HN1"));
+    }
 }

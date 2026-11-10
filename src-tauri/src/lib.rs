@@ -88,22 +88,10 @@ pub async fn get_ipc_ring_buffer(
     Ok(state.ring_buffer.snapshot().await)
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let kernel_state = AppKernelState {
+/// Initializes kernel state for Tauri 2 runtime
+pub fn create_kernel_state() -> AppKernelState {
+    AppKernelState {
         ring_buffer: Arc::new(IpcRingBuffer::new(256)),
         sgp_cache: Arc::new(SgpSessionCache::new()),
-    };
-
-    tauri::Builder::default()
-        .manage(kernel_state)
-        .invoke_handler(tauri::generate_handler![
-            probe_lcu_rcu_credentials,
-            simulate_safe_ban_arbitration,
-            check_aram_bench_snipe,
-            generate_spectator_launch_cmd,
-            get_ipc_ring_buffer,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running NexusAkari Pro Tauri 2 application");
+    }
 }

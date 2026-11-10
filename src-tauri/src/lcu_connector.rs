@@ -4,7 +4,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::RwLock;
 
@@ -150,7 +149,7 @@ pub fn scan_dual_process_credentials() -> Option<LcuRcuCredentials> {
     None
 }
 
-fn extract_flag(cmd: &str, prefix: &str) -> Option<String> {
+pub fn extract_flag(cmd: &str, prefix: &str) -> Option<String> {
     let start = cmd.find(prefix)? + prefix.len();
     let rest = &cmd[start..];
     let end = rest
@@ -162,4 +161,58 @@ fn extract_flag(cmd: &str, prefix: &str) -> Option<String> {
 pub fn format_basic_auth_header(token: &str) -> String {
     let raw = format!("riot:{}", token);
     format!("Basic {}", BASE64.encode(raw.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_lcu_and_rcu_flags() {
+        let sample_cmd = "\"D:\\LeagueClient\\LeagueClientUx.exe\" \"--app-port=58412\" \"--remoting-auth-token=tok_lcu_123\" \"--riotclient-app-port=51209\" \"--riotclient-auth-token=tok_rcu_456\" \"--rso_platform_id=HN1\"";
+        assert_eq!(extract_flag(sample_cmd, "--app-port="), Some("58412".to_string()));
+        assert_eq!(
+            extract_flag(sample_cmd, "--remoting-auth-token="),
+            Some("tok_lcu_123".to_string())
+        );
+        assert_eq!(
+            extract_flag(sample_cmd, "--riotclient-app-port="),
+            Some("51209".to_string())
+        );
+        assert_eq!(
+            extract_flag(sample_cmd, "--rso_platform_id="),
+            Some("HN1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_wamp_prefix_filter_drops_noise() {
+        let filter = WampPrefixFilter::default();
+        assert!(filter.matches("/lol-champ-select/v1/session"));
+        assert!(filter.matches("/lol-gameflow/v1/gameflow-phase"));
+        assert!(!filter.matches("/lol-Hovercard/v1/friend-info"));
+        assert!(!filter.matches("/riot-messaging-service/v1/message"));
+    }
+
+    #[tokio::test]
+    async fn test_ring_buffer_bounds_capacity() {
+        let rb = IpcRingBuffer::new(3);
+        for i in 1..=5 {
+            rb.push(IpcEnvelope {
+                id: format!("id-{}", i),
+                timestamp: "00:00:00".to_string(),
+                channel: "TEST".to_string(),
+                method: "GET".to_string(),
+                endpoint: "/test".to_string(),
+                status: 200,
+                duration_ms: 1.0,
+                payload_summary: "ok".to_string(),
+            })
+            .await;
+        }
+        let snap = rb.snapshot().await;
+        assert_eq!(snap.len(), 3);
+        assert_eq!(snap[0].id, "id-5");
+        assert_eq!(snap[2].id, "id-3");
+    }
 }

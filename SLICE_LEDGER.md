@@ -1,7 +1,7 @@
 # NexusAkari Pro (v4) — 磁盘物理分母与原子切片追踪账本 (Disk Slice Ledger)
 
 - **锁定物理分母（Total Slices）**：`6`
-- **当前已完成且无简化的切片数（Completed Slices）**：`3 / 6` (`50.00%`)
+- **当前已完成且无简化的切片数（Completed Slices）**：`4 / 6` (`66.67%`)
 - **架构底座**：`Rust (src-tauri) + Tauri 2 (ACL & IPC Channel) + React 19 + TypeScript`
 
 ---
@@ -25,8 +25,8 @@
 
 ### [x] Slice-2: Rust + Tauri 2 (ACL & Channel) 原生内核与同构桥接/AI 审判网关 (`已完成 2/6`)
 - **核心文件**：
-  - `/src-tauri/Cargo.toml`、`/src-tauri/tauri.conf.json`、`/src-tauri/capabilities/default.json`
-  - `/src-tauri/src/main.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/sgp_client.rs`、`/src-tauri/src/automation.rs`（含 `#[cfg(test)]` 原生单元测试）
+  - `/src-tauri/Cargo.toml`、`/src-tauri/build.rs`、`/src-tauri/tauri.conf.json`、`/src-tauri/capabilities/default.json`
+  - `/src-tauri/src/main.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/sgp_client.rs`、`/src-tauri/src/automation.rs`（含 6 组 `#[cfg(test)]` 原生单元测试与零 Clippy 警告修复）
   - `/.github/workflows/rust-tauri-ci.yml`：GitHub Actions 双端自动测试流水线（`cargo test`、`cargo clippy`、`node:test`）。
   - `/src/core/rustKernelSources.ts`：Tauri 2 Rust 原生模块源码注册表。
   - `/src/bridge/tauriClient.ts`：前端双模透明 IPC 桥接器（Tauri 2 Native `invoke/Channel` <-> Web 同构网关）。
@@ -39,9 +39,9 @@
   - `/src/components/LeftTelemetryRail.tsx`：三通道四元组状态监控、五阶段生命周期切换器、SGP 跨区路由选择与召唤师胜点进度环。
   - `/src/components/SmartBpWorkspace.tsx`：阵容三维伤害熵诊断、排位秒退 EV 数学期望决策卡、防误 Ban 拟人自动化控制台、一键符文页热写入、选人聊天室防屏蔽脱敏战报广播、双阶段 10 人 SGP 穿透查房看板。
 
-### [ ] Slice-4: 深度战绩穿透、胜率曲线 $P(\text{Win}\mid t)$ 葬送点取证、2D 峡谷坐标与 AI 审判庭 (`待推进`)
+### [x] Slice-4: 深度战绩穿透、胜率曲线 $P(\text{Win}\mid t)$ 葬送点取证、2D 峡谷坐标与 AI 审判庭 (`已完成 4/6`)
 - **核心文件**：
-  - `/src/components/MatchAnalyticsWorkspace.tsx`：跨区战绩穿透、10 人双转化率对比表、六维 SVG 雷达图、实时胜率曲线 $P(\text{Win}\mid t)$ 与葬送转折点标注、2D 召唤师峡谷坐标热区图、恩怨黑名单管理、Gemini 3.8 Flash 赛后审判庭面板。
+  - `/src/components/MatchAnalyticsWorkspace.tsx`：实时胜率逻辑回归曲线 $P(\text{Win}\mid t)$ 与 Top 3 葬送点取证、2D 召唤师峡谷坐标事件热区图、Gemini 3.8 Flash 赛后审判庭（毒舌审判官 / 职业赛训教练双人格）、六维能力 SVG 雷达图、全场 10 人双经济转化率对比表、召唤师恩怨黑名单账本管理器。
 
 ### [ ] Slice-5: 极地大乱斗 5ms 秒抢（带回滚锁）与斗魂竞技场双人协同助手 (`待推进`)
 - **核心文件**：
