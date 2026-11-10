@@ -1,6 +1,6 @@
 /**
  * NexusAkari Pro (v4) — Isomorphic Tauri 2 IPC & Web Gateway Client
- * Transparently routes typed commands to either:
+ * Transparently routes typed commands to:
  * 1. Native Tauri 2 Rust Runtime (`window.__TAURI_INTERNALS__.invoke`) when running as a desktop app
  * 2. Express Isomorphic Tri-Channel Bridge (`/api/bridge/*` & `/api/ai/*`) when running in Web Preview
  */
@@ -81,6 +81,27 @@ async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Dual-mode dispatcher: invokes Tauri 2 native Rust command when `window.__TAURI_INTERNALS__.invoke`
+ * is present, and seamlessly falls back to the Express isomorphic bridge in Web Preview.
+ */
+async function invokeOrFetch<T>(
+  tauriCmd: string,
+  tauriArgs: Record<string, unknown>,
+  httpUrl: string,
+  httpOptions?: RequestInit
+): Promise<T> {
+  if (isTauriNativeRuntime() && window.__TAURI_INTERNALS__?.invoke) {
+    try {
+      return await window.__TAURI_INTERNALS__.invoke<T>(tauriCmd, tauriArgs);
+    } catch {
+      // Fallback to HTTP bridge if native command delegates to sidecar
+      return apiJson<T>(httpUrl, httpOptions);
+    }
+  }
+  return apiJson<T>(httpUrl, httpOptions);
+}
+
 export const tauriBridgeClient = {
   async getBootstrapState(): Promise<{
     status: TriChannelStatus;
@@ -89,7 +110,7 @@ export const tauriBridgeClient = {
     ringBuffer: IpcEnvelope[];
     scoutProfiles: SummonerScoutProfile[];
   }> {
-    return apiJson('/api/bridge/bootstrap');
+    return invokeOrFetch('get_bootstrap_state', {}, '/api/bridge/bootstrap');
   },
 
   async setGameflowPhase(phase: GameflowPhase): Promise<{
@@ -97,47 +118,72 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/phase', {
-      method: 'POST',
-      body: JSON.stringify({ phase }),
-    });
+    return invokeOrFetch(
+      'set_gameflow_phase',
+      { phase },
+      '/api/bridge/phase',
+      {
+        method: 'POST',
+        body: JSON.stringify({ phase }),
+      }
+    );
   },
 
   async switchSgpRegion(regionCode: string): Promise<{
     status: TriChannelStatus;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/region', {
-      method: 'POST',
-      body: JSON.stringify({ regionCode }),
-    });
+    return invokeOrFetch(
+      'switch_sgp_region',
+      { regionCode },
+      '/api/bridge/region',
+      {
+        method: 'POST',
+        body: JSON.stringify({ regionCode }),
+      }
+    );
   },
 
   async updateCredentials(credentials: Partial<LcuRcuCredentials>): Promise<{
     status: TriChannelStatus;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/credentials', {
-      method: 'POST',
-      body: JSON.stringify({ credentials }),
-    });
+    return invokeOrFetch(
+      'update_credentials',
+      { credentials },
+      '/api/bridge/credentials',
+      {
+        method: 'POST',
+        body: JSON.stringify({ credentials }),
+      }
+    );
   },
 
   async updateAutomationConfig(config: Partial<AutomationConfig>): Promise<{
     automation: AutomationConfig;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/automation', {
-      method: 'POST',
-      body: JSON.stringify({ config }),
-    });
+    return invokeOrFetch(
+      'update_automation_config',
+      { config },
+      '/api/bridge/automation',
+      {
+        method: 'POST',
+        body: JSON.stringify({ config }),
+      }
+    );
   },
 
   async triggerBpSimulation(teammateHoveredId = 53): Promise<BpSimulationResult> {
-    return apiJson('/api/bridge/simulate-bp', {
-      method: 'POST',
-      body: JSON.stringify({ teammateHoveredId }),
-    });
+    return invokeOrFetch(
+      'trigger_bp_simulation',
+      { teammateHoveredId },
+      '/api/bridge/simulate-bp',
+      {
+        method: 'POST',
+        body: JSON.stringify({ teammateHoveredId }),
+      }
+    );
   },
 
   async injectRunePage(presetId: string): Promise<{
@@ -145,10 +191,15 @@ export const tauriBridgeClient = {
     message: string;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/inject-rune', {
-      method: 'POST',
-      body: JSON.stringify({ presetId }),
-    });
+    return invokeOrFetch(
+      'inject_lcu_rune_page',
+      { presetId },
+      '/api/bridge/inject-rune',
+      {
+        method: 'POST',
+        body: JSON.stringify({ presetId }),
+      }
+    );
   },
 
   async broadcastLobbyChat(
@@ -160,10 +211,15 @@ export const tauriBridgeClient = {
     throttleIntervalMs: number;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/broadcast-chat', {
-      method: 'POST',
-      body: JSON.stringify({ mode, lines }),
-    });
+    return invokeOrFetch(
+      'broadcast_lcu_lobby_chat',
+      { mode, lines },
+      '/api/bridge/broadcast-chat',
+      {
+        method: 'POST',
+        body: JSON.stringify({ mode, lines }),
+      }
+    );
   },
 
   async executeAramBenchSwap(params: {
@@ -172,10 +228,15 @@ export const tauriBridgeClient = {
     targetChampionId?: number;
     benchPoolIds: number[];
   }): Promise<AramSnipeResult> {
-    return apiJson('/api/bridge/aram-snipe', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
+    return invokeOrFetch(
+      'execute_lcu_aram_bench_swap',
+      { ...params },
+      '/api/bridge/aram-snipe',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }
+    );
   },
 
   async executeLootDisenchant(plan: LootDisenchantPlan): Promise<{
@@ -185,10 +246,15 @@ export const tauriBridgeClient = {
     orangeEssenceAdded: number;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/loot-disenchant', {
-      method: 'POST',
-      body: JSON.stringify({ plan }),
-    });
+    return invokeOrFetch(
+      'execute_lcu_loot_batch_craft',
+      { plan },
+      '/api/bridge/loot-disenchant',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      }
+    );
   },
 
   async applyClientCosmetic(payload: ClientCosmeticPayload): Promise<{
@@ -196,10 +262,15 @@ export const tauriBridgeClient = {
     lcuEndpointsCalled: string[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/cosmetic-spoof', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return invokeOrFetch(
+      'apply_lcu_cosmetic_spoof',
+      { ...payload },
+      '/api/bridge/cosmetic-spoof',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
   },
 
   async createCustomPracticeLobby(lobbyName: string, botCount: number): Promise<{
@@ -208,10 +279,15 @@ export const tauriBridgeClient = {
     message: string;
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/practice-lobby', {
-      method: 'POST',
-      body: JSON.stringify({ lobbyName, botCount }),
-    });
+    return invokeOrFetch(
+      'create_lcu_practice_lobby',
+      { lobbyName, botCount },
+      '/api/bridge/practice-lobby',
+      {
+        method: 'POST',
+        body: JSON.stringify({ lobbyName, botCount }),
+      }
+    );
   },
 
   async addBlacklistEntry(
@@ -221,10 +297,15 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson('/api/bridge/blacklist', {
-      method: 'POST',
-      body: JSON.stringify(entry),
-    });
+    return invokeOrFetch(
+      'add_blacklist_entry',
+      { entry },
+      '/api/bridge/blacklist',
+      {
+        method: 'POST',
+        body: JSON.stringify(entry),
+      }
+    );
   },
 
   async removeBlacklistEntry(puuid: string): Promise<{
@@ -232,9 +313,14 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return apiJson(`/api/bridge/blacklist/${encodeURIComponent(puuid)}`, {
-      method: 'DELETE',
-    });
+    return invokeOrFetch(
+      'remove_blacklist_entry',
+      { puuid },
+      `/api/bridge/blacklist/${encodeURIComponent(puuid)}`,
+      {
+        method: 'DELETE',
+      }
+    );
   },
 
   async requestAiMatchReview(params: {
@@ -243,9 +329,14 @@ export const tauriBridgeClient = {
     players: SummonerScoutProfile[];
     throwPoints: ThrowPointEvidence[];
   }): Promise<AiJudgeReport> {
-    return apiJson('/api/ai/match-review', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
+    return invokeOrFetch(
+      'request_ai_match_review',
+      { ...params },
+      '/api/ai/match-review',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }
+    );
   },
 };
