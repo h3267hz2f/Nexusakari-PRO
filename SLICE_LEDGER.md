@@ -1,7 +1,7 @@
 # NexusAkari Pro (v4) — 磁盘物理分母与原子切片追踪账本 (Disk Slice Ledger)
 
 - **锁定物理分母（Total Slices）**：`6`
-- **当前已完成且无简化的切片数（Completed Slices）**：`2 / 6` (`33.33%`)
+- **当前已完成且无简化的切片数（Completed Slices）**：`3 / 6` (`50.00%`)
 - **架构底座**：`Rust (src-tauri) + Tauri 2 (ACL & IPC Channel) + React 19 + TypeScript`
 
 ---
@@ -26,16 +26,18 @@
 ### [x] Slice-2: Rust + Tauri 2 (ACL & Channel) 原生内核与同构桥接/AI 审判网关 (`已完成 2/6`)
 - **核心文件**：
   - `/src-tauri/Cargo.toml`、`/src-tauri/tauri.conf.json`、`/src-tauri/capabilities/default.json`
-  - `/src-tauri/src/main.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/sgp_client.rs`、`/src-tauri/src/automation.rs`
+  - `/src-tauri/src/main.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/sgp_client.rs`、`/src-tauri/src/automation.rs`（含 `#[cfg(test)]` 原生单元测试）
+  - `/.github/workflows/rust-tauri-ci.yml`：GitHub Actions 双端自动测试流水线（`cargo test`、`cargo clippy`、`node:test`）。
   - `/src/core/rustKernelSources.ts`：Tauri 2 Rust 原生模块源码注册表。
   - `/src/bridge/tauriClient.ts`：前端双模透明 IPC 桥接器（Tauri 2 Native `invoke/Channel` <-> Web 同构网关）。
   - `/server.ts`：Express 同构三通道网关、令牌桶限流与 `RingBuffer<IpcEnvelope, 256>`、服务端 `@google/genai` (`gemini-3.8-flash`) 赛后审判庭路由。
 
-### [ ] Slice-3: 战术暗色工作台主框架、双阶段智能 BP 查房、秒退决策与聊天室脱敏广播台 (`待推进`)
+### [x] Slice-3: 战术暗色工作台主框架、双阶段智能 BP 查房、秒退决策与聊天室脱敏广播台 (`已完成 3/6`)
 - **核心文件**：
-  - `/src/index.css`：Tailwind v4 主题变量、字体绑定与 `tabular-nums` 规范。
-  - `/src/components/TopBar.tsx`、`/src/components/LeftTelemetryRail.tsx`
-  - `/src/components/SmartBpWorkspace.tsx`：双阶段 10 人查房看板、阵容三维诊断、秒退 EV 决策卡、防误 Ban 秒锁控制台、一键符文页热写入、选人聊天室防屏蔽战报广播。
+  - `/src/index.css`：Tailwind v4 主题变量、2+1 字体法则（`Outfit` + `Plus Jakarta Sans` + `JetBrains Mono`）与 `tabular-nums` 规范。
+  - `/src/components/TopBar.tsx`：严格遵守三区契约（Brand Wordmark ── 5 单行导航 ── 1 主操作按钮）。
+  - `/src/components/LeftTelemetryRail.tsx`：三通道四元组状态监控、五阶段生命周期切换器、SGP 跨区路由选择与召唤师胜点进度环。
+  - `/src/components/SmartBpWorkspace.tsx`：阵容三维伤害熵诊断、排位秒退 EV 数学期望决策卡、防误 Ban 拟人自动化控制台、一键符文页热写入、选人聊天室防屏蔽脱敏战报广播、双阶段 10 人 SGP 穿透查房看板。
 
 ### [ ] Slice-4: 深度战绩穿透、胜率曲线 $P(\text{Win}\mid t)$ 葬送点取证、2D 峡谷坐标与 AI 审判庭 (`待推进`)
 - **核心文件**：

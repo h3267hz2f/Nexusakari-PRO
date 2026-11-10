@@ -1,0 +1,73 @@
+name: NexusAkari Pro — Rust + Tauri 2 & TypeScript Core CI
+
+on:
+  push:
+    branches: [main, master, 'feat/**']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  ts-math-and-web-build:
+    name: TypeScript v4 Math Unit Tests & Vite Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: TypeScript Strict Typecheck (tsc --noEmit)
+        run: npm run lint
+
+      - name: Run Deterministic v4 Math Engine Unit Tests (node:test)
+        run: npx --yes tsx --test src/core/mathEngine.test.ts
+
+      - name: Build Production Frontend Bundle
+        run: npm run build
+
+  rust-tauri-kernel-test:
+    name: Rust Kernel Unit Tests & Clippy Audit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux WebKit2GTK & Tauri 2 System Headers
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Setup Rust Stable Toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cargo Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Run Rust Core Unit Tests (SafeBan FSM, WAMP Prefix Filter, TokenBucket, Bench Sniper)
+        working-directory: ./src-tauri
+        run: cargo test --lib -- --nocapture
+
+      - name: Run Cargo Clippy Static Analysis
+        working-directory: ./src-tauri
+        run: cargo clippy --lib -- -D warnings
