@@ -1,0 +1,6 @@
+{
+  "name": "NexusAkari Pro — 英雄联盟 Tauri 2 全栈战术与三通道桥接工作台",
+  "description": "融合 LeagueAkari、rank-analysis、Seraphine、Frank 与 LeaguePrank 护城河能力的 Rust + Tauri 2 三通道（LCU + SGP + :2999）战术分析与自动化终端。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

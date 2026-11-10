@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Tauri 2 ACL Capabilities for NexusAkari Pro Tri-Channel LCU/RCU/SGP/:2999 Engine",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:app:default",
+    "core:resources:default"
+  ]
+}

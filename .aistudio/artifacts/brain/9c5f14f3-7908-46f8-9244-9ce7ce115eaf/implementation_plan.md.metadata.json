@@ -1,0 +1,6 @@
+{
+  "summary":  "NexusAkari Pro v4 殿堂级重构计划：在 v3 基础上完成 8 大深水区自审进化，新增：(1) 选人聊天室战绩一键广播与防屏蔽同形词脱敏器；(2) 实时胜率逻辑回归曲线 P(Win|t) 与“葬送好局转折点 (Throw Point)”自动取证并移交 Gemini AI 审判庭；(3) 海克斯战利品（Loot）英雄/皮肤碎片一键批量分解精粹计算工坊与 SGP 跨区无延迟 OB 观战启动器；(4) LiveClientData (:2999) 敌方闪现/技能急速实时折算倒计时器；(5) 秒退期望收益决策器（Dodge EV Calculator）与断线自动重连/赛后秒回房闭环；(6) Tauri 2 ACL Capabilities 权限模型与 Channel 零拷贝事件流；(7) 国服/国际服 SGP 路由注册表；以及全面校准的 6 个原子切片账本。",
+  "updatedAt":  "2026-11-10T09:11:02.179199429Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
