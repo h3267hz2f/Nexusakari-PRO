@@ -506,13 +506,13 @@ export const MatchAnalyticsWorkspace: React.FC<MatchAnalyticsWorkspaceProps> = (
           </div>
 
           {/* Timeline Minute Selector Strip */}
-          <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center gap-1.5 overflow-x-auto">
+          <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-1.5">
             {activeTimelineEvents.map((ev) => (
               <button
                 key={ev.minute}
                 type="button"
                 onClick={() => setSelectedMinute(ev.minute)}
-                className={`px-2.5 py-1 rounded text-xs font-mono tabular-nums transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-2 py-1 rounded text-[11px] font-mono tabular-nums transition-colors whitespace-nowrap shrink-0 ${
                   selectedMinute === ev.minute
                     ? 'bg-sky-500 text-slate-950 font-bold'
                     : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'

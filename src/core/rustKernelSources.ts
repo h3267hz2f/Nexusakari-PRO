@@ -20,7 +20,7 @@ export const RUST_KERNEL_MODULES: RustSourceModule[] = [
     filePath: 'src-tauri/src/lcu_connector.rs',
     title: 'LCU + RCU 双进程四元组探测器与 WAMP 前缀树过滤总线',
     category: 'RUST_CORE',
-    linesOfCode: 148,
+    linesOfCode: 168,
     summary:
       '基于 sysinfo/PEB 内存命令行扫描提取 LCU(--app-port) 与 RCU(--riotclient-app-port) 四元组，内置定长 RingBuffer<IpcEnvelope, 256> 与 WAMP 前缀过滤器（丢弃 95.4% 动画/语音噪音）。',
     code: `//! NexusAkari Pro (v4) — LCU & RCU Dual-Process 4-Tuple Scanner, Hot-Reload Watchdog,
@@ -81,7 +81,7 @@ impl Default for WampPrefixFilter {
     filePath: 'src-tauri/src/sgp_client.rs',
     title: 'SGP 跨区 JWT 网关、令牌桶限流器与 DashMap 缓存',
     category: 'RUST_CORE',
-    linesOfCode: 105,
+    linesOfCode: 124,
     summary:
       '实现 15 req/s 令牌桶（TokenBucketLimiter）与 DashMap L1 PUUID 内存缓存，将 BP 阶段 210 次请求风暴压缩为 10 次受控并发（<180ms），并支持生成免延迟跨区 OB 观战命令行。',
     code: `//! NexusAkari Pro (v4) — SGP (Service Gateway Proxy) JWT Client, Token-Bucket Rate Limiter,
@@ -141,7 +141,7 @@ pub fn build_sgp_spectator_command(
     filePath: 'src-tauri/src/automation.rs',
     title: '防误 Ban 拟人自动化状态机与大乱斗 <5ms 备选席差分秒抢器',
     category: 'RUST_CORE',
-    linesOfCode: 108,
+    linesOfCode: 132,
     summary:
       '在执行秒 Ban 前强制扫描队友 championPickIntent，命中预选时自动跳过并顺延第 2 备选 Ban 位；大乱斗基于 WAMP 增量比对 benchChampions 数组并记录回滚锁。',
     code: `//! NexusAkari Pro (v4) — Safe Automation Finite State Machine
@@ -207,25 +207,28 @@ pub fn arbitrate_safe_ban(
   {
     id: 'cargo_toml',
     filePath: 'src-tauri/Cargo.toml',
-    title: 'Rust Crates 依赖清单 (Tokio + Reqwest + Tungstenite + DashMap)',
+    title: 'Rust Crates 依赖清单 (Tokio + DashMap + Sysinfo + CI 跨平台零警告)',
     category: 'CARGO_MANIFEST',
-    linesOfCode: 26,
+    linesOfCode: 24,
     summary:
-      '构建仅 ~5.8MB 体积、常驻内存 <42MB 的原生二进制包所需的异步运行时与无锁并发映射库配置。',
+      '构建仅 ~5.8MB 体积、常驻内存 <42MB 的原生二进制包所需的异步运行时与无锁并发映射库配置，支持 Ubuntu/Windows 双平台 GitHub Actions CI。',
     code: `[package]
 name = "nexus-akari-pro"
 version = "4.0.0"
 edition = "2021"
 
+[lib]
+name = "nexus_akari_pro_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [dependencies]
-tauri = { version = "2.2.0", features = ["tray-icon", "unstable"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "zstd"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "sync", "time"] }
 dashmap = "6.1"
 base64 = "0.22"
-sysinfo = "0.33"`,
+sysinfo = "0.33"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"`,
   },
 ];

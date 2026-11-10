@@ -115,7 +115,7 @@ mod tests {
     async fn test_token_bucket_acquires_and_tracks_balance() {
         let limiter = TokenBucketLimiter::new(5.0, 10.0);
         let remaining = limiter.acquire_one().await;
-        assert!(remaining >= 3.9 && remaining <= 4.1);
+        assert!((3.9..=4.1).contains(&remaining));
         let avail = limiter.available_tokens().await;
         assert_eq!(avail, 4);
     }

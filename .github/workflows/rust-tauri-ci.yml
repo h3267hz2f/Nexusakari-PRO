@@ -41,32 +41,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Install Linux WebKit2GTK & Tauri 2 System Headers
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Setup Rust Stable Toolchain (rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Rust Cargo Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: 'src-tauri -> target'
-
       - name: Run Rust Core Unit Tests (SafeBan FSM, WAMP Prefix Filter, TokenBucket, Bench Sniper)
         working-directory: ./src-tauri
-        run: cargo test --lib -- --nocapture
+        run: cargo test -- --nocapture
 
       - name: Run Cargo Clippy Static Analysis
         working-directory: ./src-tauri
-        run: cargo clippy --lib -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
