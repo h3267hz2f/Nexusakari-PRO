@@ -74,9 +74,9 @@ fn spawn_local_bridge_sidecar(app_root: &Path, port: u16) -> Option<Child> {
 }
 
 fn terminate_sidecar_tree(child: &mut Child) {
-    let pid = child.id();
     #[cfg(target_os = "windows")]
     {
+        let pid = child.id();
         let _ = Command::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .stdin(Stdio::null())
