@@ -342,6 +342,207 @@ impl AppKernelState {
         execute_lifecycle_automation_action(&self.lcu_client, &creds, &cfg, phase, &self.ring_buffer)
             .await
     }
+
+    /// 14. Executes a full Champion Select automation tick:
+    /// - ARAM <5ms Bench Wishlist Sniper (`POST /lol-champ-select/v1/session/bench/swap/{id}`)
+    /// - Safe-Ban Arbitration with Teammate Hover Guard (`PATCH /lol-champ-select/v1/session/actions/{id}`)
+    /// - Humanized Auto-Pick with Primary/Backup fallback (`PATCH /lol-champ-select/v1/session/actions/{id}`)
+    pub async fn execute_champ_select_tick(&self) -> Result<Vec<String>, String> {
+        let creds = self
+            .credentials
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| "LCU not connected".to_string())?;
+        let cfg = self.automation_config.read().await.clone();
+        let mut logs = Vec::new();
+
+        let session = self
+            .lcu_client
+            .lcu_request(
+                &creds,
+                Method::GET,
+                "/lol-champ-select/v1/session",
+                None,
+                &self.ring_buffer,
+            )
+            .await?;
+
+        let local_cell_id = session
+            .get("localPlayerCellId")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+
+        let mut current_champion_id: i32 = 0;
+        let mut teammate_hovered_ids = Vec::new();
+        let mut picked_or_banned_ids = Vec::new();
+
+        if let Some(my_team) = session.get("myTeam").and_then(|v| v.as_array()) {
+            for member in my_team {
+                let cell_id = member.get("cellId").and_then(|v| v.as_i64()).unwrap_or(-2);
+                let champ_id = member
+                    .get("championId")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32;
+                let intent_id = member
+                    .get("championPickIntent")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32;
+                if cell_id == local_cell_id {
+                    current_champion_id = champ_id;
+                } else {
+                    if intent_id > 0 {
+                        teammate_hovered_ids.push(intent_id);
+                    }
+                    if champ_id > 0 {
+                        teammate_hovered_ids.push(champ_id);
+                        picked_or_banned_ids.push(champ_id);
+                    }
+                }
+            }
+        }
+
+        // 1. ARAM <5ms Bench Wishlist Sniper
+        let bench_enabled = session
+            .get("benchEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if bench_enabled && cfg.aram_bench_sniper_enabled {
+            let bench_ids: Vec<i32> = session
+                .get("benchChampions")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| c.get("championId").and_then(|v| v.as_i64()))
+                        .map(|id| id as i32)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if let Some((wish_id, prev_id)) =
+                diff_aram_bench_pool(&cfg, current_champion_id, &bench_ids)
+            {
+                let _ = self.execute_lcu_aram_bench_swap(wish_id).await?;
+                logs.push(format!(
+                    "ARAMBenchSniper: Swapped champion {} -> wishlist {} (<5ms)",
+                    prev_id, wish_id
+                ));
+            }
+        }
+
+        // 2. Inspect Action Groups for active local Ban or Pick
+        if let Some(action_groups) = session.get("actions").and_then(|v| v.as_array()) {
+            for group in action_groups {
+                if let Some(actions) = group.as_array() {
+                    for act in actions {
+                        let completed = act
+                            .get("completed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let champ_id = act
+                            .get("championId")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
+                        if completed && champ_id > 0 {
+                            picked_or_banned_ids.push(champ_id);
+                        }
+                    }
+                }
+            }
+
+            for group in action_groups {
+                if let Some(actions) = group.as_array() {
+                    for act in actions {
+                        let actor_cell = act
+                            .get("actorCellId")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(-99);
+                        let in_progress = act
+                            .get("isInProgress")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let completed = act
+                            .get("completed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let act_id = act.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
+                        let act_type = act.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                        if actor_cell != local_cell_id || !in_progress || completed || act_id < 0 {
+                            continue;
+                        }
+
+                        if act_type == "ban" && cfg.auto_ban_enabled {
+                            let decision = arbitrate_safe_ban(
+                                &cfg,
+                                &teammate_hovered_ids,
+                                &picked_or_banned_ids,
+                            );
+                            if let Some(ban_id) = decision.selected_ban_champion_id {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    decision.applied_jitter_ms,
+                                ))
+                                .await;
+                                let ep =
+                                    format!("/lol-champ-select/v1/session/actions/{}", act_id);
+                                let body = json!({
+                                    "championId": ban_id,
+                                    "completed": true
+                                });
+                                self.lcu_client
+                                    .lcu_request(
+                                        &creds,
+                                        Method::PATCH,
+                                        &ep,
+                                        Some(body),
+                                        &self.ring_buffer,
+                                    )
+                                    .await?;
+                                logs.push(decision.audit_log);
+                            }
+                        } else if act_type == "pick" && cfg.auto_pick_enabled {
+                            let candidates: Vec<i32> = cfg
+                                .primary_pick_champion_ids
+                                .iter()
+                                .chain(cfg.backup_pick_champion_ids.iter())
+                                .copied()
+                                .collect();
+                            if let Some(pick_id) = candidates
+                                .into_iter()
+                                .find(|id| !picked_or_banned_ids.contains(id))
+                            {
+                                let jitter = (cfg.humanized_jitter_min_ms
+                                    + cfg.humanized_jitter_max_ms)
+                                    / 2;
+                                tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
+                                let ep =
+                                    format!("/lol-champ-select/v1/session/actions/{}", act_id);
+                                let body = json!({
+                                    "championId": pick_id,
+                                    "completed": true
+                                });
+                                self.lcu_client
+                                    .lcu_request(
+                                        &creds,
+                                        Method::PATCH,
+                                        &ep,
+                                        Some(body),
+                                        &self.ring_buffer,
+                                    )
+                                    .await?;
+                                logs.push(format!(
+                                    "AutoPickFSM: Locked champion {} after {}ms humanized jitter",
+                                    pick_id, jitter
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(logs)
+    }
 }
 
 pub fn simulate_safe_ban_arbitration(

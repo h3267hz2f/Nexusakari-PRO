@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --target=node22 --format=cjs --external:vite --outfile=dist-server/server.cjs",
     "start": "node server.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist dist-server server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

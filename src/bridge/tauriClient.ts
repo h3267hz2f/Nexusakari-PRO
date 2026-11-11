@@ -18,6 +18,7 @@ import {
   LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
+  TimelineMinutePoint,
   TriChannelStatus,
 } from '../core/types';
 
@@ -111,6 +112,7 @@ export const tauriBridgeClient = {
     ringBuffer: IpcEnvelope[];
     scoutProfiles: SummonerScoutProfile[];
     lootShards?: LootItemShard[];
+    matchTimeline?: TimelineMinutePoint[];
     liveClientConnected?: boolean;
   }> {
     return invokeOrFetch('get_bootstrap_state', {}, '/api/bridge/bootstrap');
@@ -122,6 +124,7 @@ export const tauriBridgeClient = {
     status: TriChannelStatus;
     scoutProfiles: SummonerScoutProfile[];
     lootShards: LootItemShard[];
+    matchTimeline?: TimelineMinutePoint[];
     ringBuffer: IpcEnvelope[];
   }> {
     return invokeOrFetch(
@@ -137,6 +140,7 @@ export const tauriBridgeClient = {
   async setGameflowPhase(phase: GameflowPhase): Promise<{
     status: TriChannelStatus;
     scoutProfiles: SummonerScoutProfile[];
+    matchTimeline?: TimelineMinutePoint[];
     ringBuffer: IpcEnvelope[];
   }> {
     return invokeOrFetch(
@@ -169,6 +173,7 @@ export const tauriBridgeClient = {
     status: TriChannelStatus;
     scoutProfiles?: SummonerScoutProfile[];
     lootShards?: LootItemShard[];
+    matchTimeline?: TimelineMinutePoint[];
     ringBuffer: IpcEnvelope[];
   }> {
     return invokeOrFetch(

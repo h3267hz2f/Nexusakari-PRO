@@ -21,6 +21,7 @@ import {
 
 interface MatchAnalyticsWorkspaceProps {
   scoutProfiles: SummonerScoutProfile[];
+  matchTimeline?: TimelineMinutePoint[];
   blacklist: BlacklistEntry[];
   activeRegion: string;
   selectedPlayerPuuid: string | null;
@@ -47,6 +48,7 @@ const RADAR_AXES: Array<{
 
 export const MatchAnalyticsWorkspace: React.FC<MatchAnalyticsWorkspaceProps> = ({
   scoutProfiles,
+  matchTimeline,
   blacklist,
   activeRegion,
   selectedPlayerPuuid,
@@ -75,9 +77,17 @@ export const MatchAnalyticsWorkspace: React.FC<MatchAnalyticsWorkspaceProps> = (
   const [aiReport, setAiReport] = useState<AiJudgeReport | null>(null);
   const [aiLoading, setAiLoading] = useState<boolean>(false);
 
+  const activeTimeline = useMemo(
+    () =>
+      matchTimeline && matchTimeline.length > 0
+        ? matchTimeline
+        : MATCH_TIMELINE_FIXTURE,
+    [matchTimeline]
+  );
+
   const { winProbCurve, throwPoints } = useMemo(
-    () => analyzeWinProbabilityAndThrows(MATCH_TIMELINE_FIXTURE, 0.08),
-    []
+    () => analyzeWinProbabilityAndThrows(activeTimeline, 0.08),
+    [activeTimeline]
   );
 
   const selectedPlayer = useMemo(() => {
@@ -104,16 +114,17 @@ export const MatchAnalyticsWorkspace: React.FC<MatchAnalyticsWorkspaceProps> = (
   }, [scoutProfiles, roleFilter, searchQuery]);
 
   const activeTimelineEvents = useMemo(
-    () => MATCH_TIMELINE_FIXTURE.filter((pt) => Boolean(pt.eventSummary)),
-    []
+    () => activeTimeline.filter((pt) => Boolean(pt.eventSummary)),
+    [activeTimeline]
   );
 
   const selectedTimelinePoint: TimelineMinutePoint = useMemo(() => {
     return (
-      MATCH_TIMELINE_FIXTURE.find((pt) => pt.minute === selectedMinute) ??
-      activeTimelineEvents[0]
+      activeTimeline.find((pt) => pt.minute === selectedMinute) ??
+      activeTimelineEvents[0] ??
+      activeTimeline[activeTimeline.length - 1]
     );
-  }, [selectedMinute, activeTimelineEvents]);
+  }, [selectedMinute, activeTimeline, activeTimelineEvents]);
 
   const handleQuickAddPlayerToBlacklist = async (
     player: SummonerScoutProfile,
@@ -1040,108 +1051,152 @@ export const MatchAnalyticsWorkspace: React.FC<MatchAnalyticsWorkspaceProps> = (
         </div>
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3.5 font-mono tabular-nums">
-          <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-sans font-bold text-amber-400">
-                {selectedPlayer.assignedRole === RoleType.TOP
-                  ? '基石：不灭之握 (Grasp)'
-                  : selectedPlayer.assignedRole === RoleType.SUP
-                  ? '基石：冰川增幅 (Glacial)'
-                  : '基石：强攻 / 征服者'}
-              </span>
-              <span className="text-slate-400">主系核心</span>
-            </div>
-            <div className="text-lg font-bold text-slate-100 mt-1.5">
-              额外伤害{' '}
-              {Math.round(
-                (selectedPlayer.recentMatches[0]?.damageDealt ?? 22000) * 0.092
-              ).toLocaleString()}{' '}
-              · 治疗{' '}
-              {Math.round(
-                (selectedPlayer.recentMatches[0]?.damageTaken ?? 18000) * 0.064
-              ).toLocaleString()}
-            </div>
-            <p className="font-sans text-[11px] text-slate-400 mt-1">
-              整局累计触发{' '}
-              {Math.max(
-                14,
-                Math.round(
-                  ((selectedPlayer.recentMatches[0]?.kills ?? 5) +
-                    (selectedPlayer.recentMatches[0]?.assists ?? 8)) *
-                    2.4
-                )
-              )}{' '}
-              次 · 占英雄总伤害 9.2%
-            </p>
-          </div>
+          {(
+            selectedPlayer.perkTelemetry ??
+            selectedPlayer.recentMatches[0]?.runeTelemetry ??
+            []
+          ).length > 0 ? (
+            (
+              selectedPlayer.perkTelemetry ??
+              selectedPlayer.recentMatches[0]?.runeTelemetry ??
+              []
+            )
+              .slice(0, 4)
+              .map((perk) => (
+                <div
+                  key={perk.perkId}
+                  className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80"
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span
+                      className={`font-sans font-bold ${
+                        perk.isKeystone ? 'text-amber-400' : 'text-sky-400'
+                      }`}
+                    >
+                      {perk.perkName}
+                    </span>
+                    <span className="text-slate-400">{perk.styleName}</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-100 mt-1.5">
+                    Var1: {perk.var1.toLocaleString()} · Var2:{' '}
+                    {perk.var2.toLocaleString()}
+                  </div>
+                  <p className="font-sans text-[11px] text-slate-400 mt-1">
+                    {perk.primaryMetricLabel}
+                  </p>
+                </div>
+              ))
+          ) : (
+            <>
+              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-sans font-bold text-amber-400">
+                    {selectedPlayer.assignedRole === RoleType.TOP
+                      ? '基石：不灭之握 (Grasp)'
+                      : selectedPlayer.assignedRole === RoleType.SUP
+                      ? '基石：冰川增幅 (Glacial)'
+                      : '基石：强攻 / 征服者'}
+                  </span>
+                  <span className="text-slate-400">主系核心</span>
+                </div>
+                <div className="text-lg font-bold text-slate-100 mt-1.5">
+                  额外伤害{' '}
+                  {Math.round(
+                    (selectedPlayer.recentMatches[0]?.damageDealt ?? 22000) * 0.092
+                  ).toLocaleString()}{' '}
+                  · 治疗{' '}
+                  {Math.round(
+                    (selectedPlayer.recentMatches[0]?.damageTaken ?? 18000) * 0.064
+                  ).toLocaleString()}
+                </div>
+                <p className="font-sans text-[11px] text-slate-400 mt-1">
+                  整局累计触发{' '}
+                  {Math.max(
+                    14,
+                    Math.round(
+                      ((selectedPlayer.recentMatches[0]?.kills ?? 5) +
+                        (selectedPlayer.recentMatches[0]?.assists ?? 8)) *
+                        2.4
+                    )
+                  )}{' '}
+                  次 · 占英雄总伤害 9.2%
+                </p>
+              </div>
 
-          <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-sans font-bold text-sky-400">
-                凯旋 / 气定神闲 (Triumph)
-              </span>
-              <span className="text-slate-400">主系槽位 1</span>
-            </div>
-            <div className="text-lg font-bold text-emerald-400 mt-1.5">
-              已回复生命{' '}
-              {Math.round(
-                ((selectedPlayer.recentMatches[0]?.kills ?? 4) +
-                  (selectedPlayer.recentMatches[0]?.assists ?? 7)) *
-                  142
-              ).toLocaleString()}{' '}
-              HP
-            </div>
-            <p className="font-sans text-[11px] text-slate-400 mt-1">
-              参与击杀额外赏金 +
-              {((selectedPlayer.recentMatches[0]?.kills ?? 4) +
-                (selectedPlayer.recentMatches[0]?.assists ?? 7)) *
-                20}{' '}
-              G · 团战残血锁血{' '}
-              {Math.max(1, Math.floor((selectedPlayer.recentMatches[0]?.kills ?? 4) / 2))} 次
-            </p>
-          </div>
+              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-sans font-bold text-sky-400">
+                    凯旋 / 气定神闲 (Triumph)
+                  </span>
+                  <span className="text-slate-400">主系槽位 1</span>
+                </div>
+                <div className="text-lg font-bold text-emerald-400 mt-1.5">
+                  已回复生命{' '}
+                  {Math.round(
+                    ((selectedPlayer.recentMatches[0]?.kills ?? 4) +
+                      (selectedPlayer.recentMatches[0]?.assists ?? 7)) *
+                      142
+                  ).toLocaleString()}{' '}
+                  HP
+                </div>
+                <p className="font-sans text-[11px] text-slate-400 mt-1">
+                  参与击杀额外赏金 +
+                  {((selectedPlayer.recentMatches[0]?.kills ?? 4) +
+                    (selectedPlayer.recentMatches[0]?.assists ?? 7)) *
+                    20}{' '}
+                  G · 团战残血锁血{' '}
+                  {Math.max(
+                    1,
+                    Math.floor((selectedPlayer.recentMatches[0]?.kills ?? 4) / 2)
+                  )}{' '}
+                  次
+                </p>
+              </div>
 
-          <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-sans font-bold text-sky-400">
-                致命一击 / 坚毅不倒 (Coup)
-              </span>
-              <span className="text-slate-400">主系槽位 3</span>
-            </div>
-            <div className="text-lg font-bold text-slate-100 mt-1.5">
-              斩杀增伤 +
-              {Math.round(
-                (selectedPlayer.recentMatches[0]?.damageDealt ?? 22000) * 0.048
-              ).toLocaleString()}{' '}
-              DMG
-            </div>
-            <p className="font-sans text-[11px] text-slate-400 mt-1">
-              对低于 40% 生命值敌方英雄造成 8% 额外斩杀伤害
-            </p>
-          </div>
+              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-sans font-bold text-sky-400">
+                    致命一击 / 坚毅不倒 (Coup)
+                  </span>
+                  <span className="text-slate-400">主系槽位 3</span>
+                </div>
+                <div className="text-lg font-bold text-slate-100 mt-1.5">
+                  斩杀增伤 +
+                  {Math.round(
+                    (selectedPlayer.recentMatches[0]?.damageDealt ?? 22000) * 0.048
+                  ).toLocaleString()}{' '}
+                  DMG
+                </div>
+                <p className="font-sans text-[11px] text-slate-400 mt-1">
+                  对低于 40% 生命值敌方英雄造成 8% 额外斩杀伤害
+                </p>
+              </div>
 
-          <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-sans font-bold text-amber-400">
-                {selectedPlayer.hasCosmicInsight
-                  ? '星界洞悉 (+18 召唤师急速)'
-                  : '骸骨镀层 / 过度生长'}
-              </span>
-              <span className="text-slate-400">副系核心</span>
-            </div>
-            <div className="text-lg font-bold text-sky-400 mt-1.5">
-              {selectedPlayer.hasCosmicInsight
-                ? `闪现冷却缩减 -${selectedPlayer.hasIonianBoots ? 66 : 46}s/次`
-                : `格挡减免 +${Math.round(
-                    (selectedPlayer.recentMatches[0]?.selfMitigatedDamage ?? 12000) * 0.09
-                  )} DMG`}
-            </div>
-            <p className="font-sans text-[11px] text-slate-400 mt-1">
-              {selectedPlayer.hasCosmicInsight
-                ? '配合主动装备急速 +10，整局多转出 2 次关键团战闪现'
-                : '对线期换血提供高额固定减伤与额外最大生命加成'}
-            </p>
-          </div>
+              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800/80">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-sans font-bold text-amber-400">
+                    {selectedPlayer.hasCosmicInsight
+                      ? '星界洞悉 (+18 召唤师急速)'
+                      : '骸骨镀层 / 过度生长'}
+                  </span>
+                  <span className="text-slate-400">副系核心</span>
+                </div>
+                <div className="text-lg font-bold text-sky-400 mt-1.5">
+                  {selectedPlayer.hasCosmicInsight
+                    ? `闪现冷却缩减 -${selectedPlayer.hasIonianBoots ? 66 : 46}s/次`
+                    : `格挡减免 +${Math.round(
+                        (selectedPlayer.recentMatches[0]?.selfMitigatedDamage ?? 12000) *
+                          0.09
+                      )} DMG`}
+                </div>
+                <p className="font-sans text-[11px] text-slate-400 mt-1">
+                  {selectedPlayer.hasCosmicInsight
+                    ? '配合主动装备急速 +10，整局多转出 2 次关键团战闪现'
+                    : '对线期换血提供高额固定减伤与额外最大生命加成'}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       </section>
     </div>

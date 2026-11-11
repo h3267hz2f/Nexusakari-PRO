@@ -9,9 +9,8 @@
 
 import dotenv from 'dotenv';
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   ARAM_BALANCE_DATABASE,
@@ -21,11 +20,13 @@ import {
   INITIAL_IPC_RING_BUFFER,
   INITIAL_TRI_CHANNEL_STATUS,
   LOOT_SHARDS_INVENTORY,
+  MATCH_TIMELINE_FIXTURE,
   RUNE_PAGE_PRESETS,
   SGP_REGION_REGISTRY,
 } from './src/core/telemetryFixtures';
 import {
   callLiveLcuEndpoint,
+  executeLiveAutomationTick,
   executeRealChatBroadcast,
   executeRealCosmeticSpoof,
   executeRealLootDisenchant,
@@ -46,13 +47,11 @@ import {
   LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
+  TimelineMinutePoint,
   TriChannelStatus,
 } from './src/core/types';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Initialize server-side Gemini client per @google/genai guidelines
 function createGeminiClient(): GoogleGenAI | null {
@@ -82,6 +81,9 @@ let ipcCounter = 100;
 let liveClientConnected = false;
 let liveScoutProfiles: SummonerScoutProfile[] | null = null;
 let liveLootShards: LootItemShard[] | null = null;
+let liveMatchTimeline: TimelineMinutePoint[] | null = null;
+let liveAutomationDaemonStarted = false;
+let liveAutomationTickInFlight = false;
 
 function pushIpcEnvelope(
   channel: IpcEnvelope['channel'],
@@ -121,8 +123,33 @@ function recordAdapterEnvelope(env: Omit<IpcEnvelope, 'id' | 'timestamp'>) {
 }
 
 /**
+ * Starts the 1500ms background automation daemon that automatically executes
+ * ReadyCheck Auto-Accept, ChampSelect Safe-Ban & Auto-Pick, ARAM <5ms Bench Sniper,
+ * and Auto-Reconnect whenever a real LeagueClientUx.exe is connected.
+ */
+function ensureLiveAutomationDaemon() {
+  if (liveAutomationDaemonStarted) return;
+  liveAutomationDaemonStarted = true;
+  setInterval(async () => {
+    if (!liveClientConnected || liveAutomationTickInFlight) return;
+    liveAutomationTickInFlight = true;
+    try {
+      await executeLiveAutomationTick(
+        triChannelStatus.credentials,
+        automationConfig,
+        recordAdapterEnvelope
+      );
+    } catch {
+      // Ignore transient LCU poll errors during client phase transitions
+    } finally {
+      liveAutomationTickInFlight = false;
+    }
+  }, 1500);
+}
+
+/**
  * Probes OS process table for LeagueClientUx.exe or tests currently configured 127.0.0.1:{lcuPort},
- * then pulls live session profiles and Hextech Loot shards if a real client responds.
+ * then pulls live session profiles, timeline, and Hextech Loot shards if a real client responds.
  */
 async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
   connected: boolean;
@@ -136,6 +163,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       liveClientConnected = false;
       liveScoutProfiles = null;
       liveLootShards = null;
+      liveMatchTimeline = null;
       triChannelStatus.mode = 'protocol-replay';
       pushIpcEnvelope(
         'TAURI_CMD',
@@ -168,14 +196,19 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       liveClientConnected = true;
       triChannelStatus.mode = 'tauri-native';
       triChannelStatus.lcuConnected = true;
+      ensureLiveAutomationDaemon();
 
       const sessionRes = await fetchLiveSessionAndScoutProfiles(
         creds,
-        recordAdapterEnvelope
+        recordAdapterEnvelope,
+        blacklistLedger
       );
       triChannelStatus.gameflowPhase = sessionRes.phase;
       if (sessionRes.profiles && sessionRes.profiles.length > 0) {
         liveScoutProfiles = sessionRes.profiles;
+      }
+      if (sessionRes.timeline && sessionRes.timeline.length > 0) {
+        liveMatchTimeline = sessionRes.timeline;
       }
 
       // Also probe :2999 live client data
@@ -197,7 +230,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       );
       return {
         connected: true,
-        message: `已成功直连本地 LeagueClientUx.exe (${sumName} · 127.0.0.1:${creds.lcuPort}) · 阶段 ${sessionRes.phase}`,
+        message: `已成功直连本地 LeagueClientUx.exe (${sumName} · 127.0.0.1:${creds.lcuPort}) · 阶段 ${sessionRes.phase} · 后台自动化守护已激活`,
       };
     }
   } catch {
@@ -207,6 +240,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
   liveClientConnected = false;
   liveScoutProfiles = null;
   liveLootShards = null;
+  liveMatchTimeline = null;
   triChannelStatus.mode = 'protocol-replay';
   pushIpcEnvelope(
     'TAURI_CMD',
@@ -265,6 +299,13 @@ function getCurrentLootShards(): LootItemShard[] {
     return liveLootShards;
   }
   return LOOT_SHARDS_INVENTORY;
+}
+
+function getCurrentMatchTimeline(): TimelineMinutePoint[] {
+  if (liveClientConnected && liveMatchTimeline && liveMatchTimeline.length > 0) {
+    return liveMatchTimeline;
+  }
+  return MATCH_TIMELINE_FIXTURE;
 }
 
 function buildDeterministicFallbackJudgeReport(
@@ -350,6 +391,7 @@ async function startServer() {
       ringBuffer: ipcRingBuffer,
       scoutProfiles: getCurrentScoutProfiles(),
       lootShards: getCurrentLootShards(),
+      matchTimeline: getCurrentMatchTimeline(),
       liveClientConnected,
     });
   });
@@ -363,15 +405,29 @@ async function startServer() {
       status: triChannelStatus,
       scoutProfiles: getCurrentScoutProfiles(),
       lootShards: getCurrentLootShards(),
+      matchTimeline: getCurrentMatchTimeline(),
       ringBuffer: ipcRingBuffer,
     });
   });
 
   // 2. Switch Gameflow Phase (Two-stage BP vs InGame intelligence unlock)
-  app.post('/api/bridge/phase', (req, res) => {
+  app.post('/api/bridge/phase', async (req, res) => {
     const { phase } = req.body as { phase: GameflowPhase };
     if (phase) {
       triChannelStatus.gameflowPhase = phase;
+      if (liveClientConnected) {
+        const sessionRes = await fetchLiveSessionAndScoutProfiles(
+          triChannelStatus.credentials,
+          recordAdapterEnvelope,
+          blacklistLedger
+        );
+        if (sessionRes.profiles && sessionRes.profiles.length > 0) {
+          liveScoutProfiles = sessionRes.profiles;
+        }
+        if (sessionRes.timeline && sessionRes.timeline.length > 0) {
+          liveMatchTimeline = sessionRes.timeline;
+        }
+      }
       const unlockMsg =
         phase === GameflowPhase.IN_PROGRESS
           ? 'Gameflow -> InProgress: Unlocked Enemy 5 PUUIDs via /lol-gameflow/v1/session & synced :2999 timers'
@@ -389,6 +445,7 @@ async function startServer() {
     res.json({
       status: triChannelStatus,
       scoutProfiles: getCurrentScoutProfiles(),
+      matchTimeline: getCurrentMatchTimeline(),
       ringBuffer: ipcRingBuffer,
     });
   });
@@ -439,6 +496,7 @@ async function startServer() {
       status: triChannelStatus,
       scoutProfiles: getCurrentScoutProfiles(),
       lootShards: getCurrentLootShards(),
+      matchTimeline: getCurrentMatchTimeline(),
       ringBuffer: ipcRingBuffer,
     });
   });
@@ -463,8 +521,8 @@ async function startServer() {
     });
   });
 
-  // 6. Simulate BP Safe Ban Arbitration & Lock-In
-  app.post('/api/bridge/simulate-bp', (req, res) => {
+  // 6. Execute Live BP Automation Tick OR Simulate BP Safe Ban Arbitration & Lock-In
+  app.post('/api/bridge/simulate-bp', async (req, res) => {
     const teammateHoveredId = Number(req.body?.teammateHoveredId ?? 53);
     const skippedTeammateIntentBanIds: number[] = [];
     let lockedBanChampionId: number | null = null;
@@ -478,12 +536,35 @@ async function startServer() {
       break;
     }
 
-    const lockedPickChampionId = automationConfig.primaryPickChampionIds[0] ?? 203;
+    let lockedPickChampionId = automationConfig.primaryPickChampionIds[0] ?? 203;
     const appliedJitterMs = Math.round(
       automationConfig.humanizedJitterMinMs +
         Math.random() *
           Math.max(10, automationConfig.humanizedJitterMaxMs - automationConfig.humanizedJitterMinMs)
     );
+
+    let liveExecutedLogs: string[] = [];
+    if (liveClientConnected) {
+      const liveTick = await executeLiveAutomationTick(
+        triChannelStatus.credentials,
+        automationConfig,
+        recordAdapterEnvelope
+      );
+      liveExecutedLogs = liveTick.executedActions;
+      if (liveTick.skippedTeammateIntentBanIds.length > 0) {
+        skippedTeammateIntentBanIds.splice(
+          0,
+          skippedTeammateIntentBanIds.length,
+          ...liveTick.skippedTeammateIntentBanIds
+        );
+      }
+      if (liveTick.lockedBanChampionId) {
+        lockedBanChampionId = liveTick.lockedBanChampionId;
+      }
+      if (liveTick.lockedPickChampionId) {
+        lockedPickChampionId = liveTick.lockedPickChampionId;
+      }
+    }
 
     const hoveredName = CHAMPION_NAME_MAP[teammateHoveredId] ?? `英雄 #${teammateHoveredId}`;
     const banName = lockedBanChampionId
@@ -491,13 +572,16 @@ async function startServer() {
       : '未禁用';
     const pickName = CHAMPION_NAME_MAP[lockedPickChampionId] ?? `英雄 #${lockedPickChampionId}`;
 
-    const auditTrail: string[] = [
-      `[ReadyCheck] 检测到对局弹窗，经 ${automationConfig.autoAcceptDelayMs}ms 防误触延迟后调用 POST /lol-matchmaking/v1/ready-check/accept`,
-      skippedTeammateIntentBanIds.length > 0
-        ? `[SafeBan护栏触发] 首选禁用目标【${hoveredName}】正被我方5楼辅助预选亮出 (championPickIntent=${teammateHoveredId})，Rust 状态机自动拦截误Ban并顺延至第2顺位【${banName}】！`
-        : `[SafeBan执行] 队友无预选冲突，已锁定禁用【${banName}】`,
-      `[HumanizedLock] 注入高斯拟人抖动 +${appliedJitterMs}ms 后，执行 PATCH /lol-champ-select/v1/session/actions 秒锁主选英雄【${pickName}】`,
-    ];
+    const auditTrail: string[] =
+      liveExecutedLogs.length > 0
+        ? liveExecutedLogs
+        : [
+            `[ReadyCheck] 检测到对局弹窗，经 ${automationConfig.autoAcceptDelayMs}ms 防误触延迟后调用 POST /lol-matchmaking/v1/ready-check/accept`,
+            skippedTeammateIntentBanIds.length > 0
+              ? `[SafeBan护栏触发] 首选禁用目标【${hoveredName}】正被我方5楼辅助预选亮出 (championPickIntent=${teammateHoveredId})，Rust 状态机自动拦截误Ban并顺延至第2顺位【${banName}】！`
+              : `[SafeBan执行] 队友无预选冲突，已锁定禁用【${banName}】`,
+            `[HumanizedLock] 注入高斯拟人抖动 +${appliedJitterMs}ms 后，执行 PATCH /lol-champ-select/v1/session/actions 秒锁主选英雄【${pickName}】`,
+          ];
 
     pushIpcEnvelope(
       'LCU_REST',
@@ -1049,20 +1133,24 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const cwdDist = path.join(process.cwd(), 'dist');
+    const distPath = fs.existsSync(cwdDist)
+      ? cwdDist
+      : path.resolve(process.cwd(), '..', 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`NexusAkari Pro v4 Isomorphic Bridge & AI Server running at http://localhost:${PORT}`);
     void probeAndSyncLiveClient(true);

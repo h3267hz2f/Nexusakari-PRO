@@ -1,8 +1,9 @@
-name: NexusAkari Pro — Rust + Tauri 2 & TypeScript Core CI
+name: NexusAkari Pro — Rust + Tauri 2 & Windows Desktop Installer CI
 
 on:
   push:
     branches: [main, master, 'feat/**']
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -31,11 +32,13 @@ jobs:
       - name: TypeScript Strict Typecheck (tsc --noEmit)
         run: npm run lint
 
-      - name: Run Deterministic v4 Math Engine Unit Tests (node:test)
+      - name: Run Deterministic v4 Math Engine & Live LCU Adapter Unit Tests (node:test)
         run: npx --yes tsx --test src/core/mathEngine.test.ts
 
-      - name: Build Production Frontend Bundle
-        run: npm run build
+      - name: Build Production Frontend & Self-Contained Bridge Bundle
+        run: |
+          npm run build
+          npm run build:server
 
   rust-tauri-kernel-test:
     name: Rust Kernel Unit Tests & Clippy Audit (${{ matrix.os }})
@@ -60,3 +63,65 @@ jobs:
       - name: Run Cargo Clippy Static Analysis
         working-directory: ./src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+  windows-desktop-installer:
+    name: Build Windows x64 Setup.exe & Portable.zip Bundle
+    needs: [ts-math-and-web-build, rust-tauri-kernel-test]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust Stable Toolchain (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node Dependencies & Build Frontend + Standalone Bridge
+        run: |
+          npm install --legacy-peer-deps
+          npm run build
+          npm run build:server
+
+      - name: Compile Native Windows x64 Release Binary (nexus-akari-pro.exe)
+        working-directory: ./src-tauri
+        run: cargo build --release
+
+      - name: Smoke-Test Native Windows Executable
+        shell: pwsh
+        run: |
+          ./src-tauri/target/release/nexus-akari-pro.exe --smoke-test
+
+      - name: Stage Self-Contained Windows Distribution & Build NSIS Setup.exe + Portable.zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-stage/dist" | Out-Null
+          New-Item -ItemType Directory -Force -Path "release-stage/runtime" | Out-Null
+          New-Item -ItemType Directory -Force -Path "release-bundles" | Out-Null
+
+          Copy-Item "src-tauri/target/release/nexus-akari-pro.exe" "release-stage/nexus-akari-pro.exe" -Force
+          Copy-Item "dist/*" "release-stage/dist/" -Recurse -Force
+          Copy-Item "dist-server/server.cjs" "release-stage/runtime/server.cjs" -Force
+
+          $nodePath = (Get-Command node).Source
+          Copy-Item $nodePath "release-stage/runtime/node.exe" -Force
+
+          Set-Content -Path "release-stage/Start-NexusAkari-Pro.cmd" -Value "@echo off`r`nstart `"`" `"%~dp0nexus-akari-pro.exe`"" -Encoding ASCII
+
+          Compress-Archive -Path "release-stage/*" -DestinationPath "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip" -Force
+
+          makensis src-tauri/installer.nsi
+          Get-ChildItem release-bundles
+
+      - name: Upload Windows x64 Setup.exe & Portable.zip Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusAkari-Pro-v4.0.0-Windows-x64-Installer
+          path: |
+            release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe
+            release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip
+          if-no-files-found: error
+          retention-days: 30

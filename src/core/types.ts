@@ -132,6 +132,18 @@ export interface PlayerMatchStats {
   ccScoreSeconds: number;
   coPlayerPuuids: string[];
   enemyPuuids: string[];
+  runeTelemetry?: RunePerkTelemetryItem[];
+}
+
+export interface RunePerkTelemetryItem {
+  perkId: number;
+  perkName: string;
+  styleName: string;
+  isKeystone: boolean;
+  var1: number;
+  var2: number;
+  var3: number;
+  primaryMetricLabel: string;
 }
 
 export interface RpiBreakdown {
@@ -217,6 +229,7 @@ export interface SummonerScoutProfile {
   latestRpiBreakdown: RpiBreakdown;
   tags: SummonerTag[];
   premadeGroupId?: string;
+  perkTelemetry?: RunePerkTelemetryItem[];
   isAnonymousInBp: boolean;
 }
 

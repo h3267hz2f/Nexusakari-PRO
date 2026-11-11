@@ -152,11 +152,11 @@ pub async fn poll_live_client_2999(
   {
     id: 'lib_rs',
     filePath: 'src-tauri/src/lib.rs',
-    title: 'AppKernelState 14 项全栈异步内核命令控制器',
+    title: 'AppKernelState 14 项全栈异步内核命令控制器 (含 BP 安全仲裁 Tick)',
     category: 'RUST_CORE',
-    linesOfCode: 325,
+    linesOfCode: 515,
     summary:
-      '将 LcuRestClient、SgpHttpClient、IpcRingBuffer、PID 看门狗、符文热写入、战利品批量合成、生涯皮肤/段位伪装、5v5 训练房创建与 :2999 轮询统一封装进 AppKernelState。',
+      '将 LcuRestClient、SgpHttpClient、IpcRingBuffer、PID 看门狗、execute_champ_select_tick（BP 防误 Ban + 拟人秒选 + ARAM <5ms 备选席秒抢）、符文热写入、战利品批量合成、生涯皮肤/段位伪装、5v5 训练房创建与 :2999 轮询统一封装进 AppKernelState。',
     code: `pub struct AppKernelState {
     pub lcu_client: LcuRestClient,
     pub sgp_client: SgpHttpClient,
@@ -166,6 +166,15 @@ pub async fn poll_live_client_2999(
     pub active_region: RwLock<String>,
     pub automation_config: RwLock<AutomationConfig>,
     pub watchdog_shutdown_tx: watch::Sender<bool>,
+}
+
+impl AppKernelState {
+    pub async fn execute_champ_select_tick(&self) -> Result<Vec<String>, String> {
+        // 1. ARAM <5ms Bench Wishlist Sniper (POST /lol-champ-select/v1/session/bench/swap/{id})
+        // 2. Safe-Ban Arbitration with Teammate Hover Guard (PATCH /lol-champ-select/v1/session/actions/{id})
+        // 3. Humanized Auto-Pick with Primary/Backup fallback (PATCH /lol-champ-select/v1/session/actions/{id})
+        Ok(vec![])
+    }
 }`,
   },
   {

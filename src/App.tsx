@@ -25,6 +25,7 @@ import {
   INITIAL_IPC_RING_BUFFER,
   INITIAL_TRI_CHANNEL_STATUS,
   LOOT_SHARDS_INVENTORY,
+  MATCH_TIMELINE_FIXTURE,
 } from './core/telemetryFixtures';
 import {
   AiJudgePersona,
@@ -39,6 +40,7 @@ import {
   LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
+  TimelineMinutePoint,
   TriChannelStatus,
 } from './core/types';
 
@@ -79,6 +81,9 @@ export function App() {
   const [lootShards, setLootShards] = useState<LootItemShard[]>(
     LOOT_SHARDS_INVENTORY
   );
+  const [matchTimeline, setMatchTimeline] = useState<TimelineMinutePoint[]>(
+    MATCH_TIMELINE_FIXTURE
+  );
   const [selectedPlayerPuuid, setSelectedPlayerPuuid] = useState<string | null>(
     () => buildHydratedScoutProfiles(INITIAL_BLACKLIST_LEDGER)[0]?.puuid ?? null
   );
@@ -97,6 +102,9 @@ export function App() {
         setScoutProfiles(res.scoutProfiles);
         if (res.lootShards && res.lootShards.length > 0) {
           setLootShards(res.lootShards);
+        }
+        if (res.matchTimeline && res.matchTimeline.length > 0) {
+          setMatchTimeline(res.matchTimeline);
         }
       })
       .catch(() => {
@@ -118,6 +126,9 @@ export function App() {
       if (res.lootShards && res.lootShards.length > 0) {
         setLootShards(res.lootShards);
       }
+      if (res.matchTimeline && res.matchTimeline.length > 0) {
+        setMatchTimeline(res.matchTimeline);
+      }
       setRingBuffer(res.ringBuffer);
       return { connected: res.connected, message: res.message };
     } catch {
@@ -133,6 +144,9 @@ export function App() {
       const res = await tauriBridgeClient.setGameflowPhase(phase);
       setStatus(res.status);
       setScoutProfiles(res.scoutProfiles);
+      if (res.matchTimeline && res.matchTimeline.length > 0) {
+        setMatchTimeline(res.matchTimeline);
+      }
       setRingBuffer(res.ringBuffer);
     } catch {
       setStatus((prev) => ({ ...prev, gameflowPhase: phase }));
@@ -167,6 +181,9 @@ export function App() {
       }
       if (res.lootShards && res.lootShards.length > 0) {
         setLootShards(res.lootShards);
+      }
+      if (res.matchTimeline && res.matchTimeline.length > 0) {
+        setMatchTimeline(res.matchTimeline);
       }
       setRingBuffer(res.ringBuffer);
     } catch {
@@ -323,6 +340,7 @@ export function App() {
           {activeTab === 'match-analytics' && (
             <MatchAnalyticsWorkspace
               scoutProfiles={scoutProfiles}
+              matchTimeline={matchTimeline}
               blacklist={blacklist}
               activeRegion={status.activeRegion}
               selectedPlayerPuuid={selectedPlayerPuuid}

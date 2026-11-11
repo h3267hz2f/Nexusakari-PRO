@@ -289,8 +289,48 @@ test('Slice-1.6: Live LCU Command-Line Parser & Riot Raw JSON-to-Domain Mappers'
   assert.equal(mappedMatches[0].championName, '千珏');
   assert.equal(mappedMatches[0].role, RoleType.JGL);
   assert.equal(mappedMatches[0].kills, 12);
+  assert.ok(
+    mappedMatches[0].runeTelemetry && mappedMatches[0].runeTelemetry.length >= 1,
+    'Expected live perk0..5 telemetry to be extracted from raw stats'
+  );
+  assert.equal(mappedMatches[0].runeTelemetry![0].perkId, 8005);
+  assert.equal(mappedMatches[0].runeTelemetry![0].var1, 3120);
 
   const rpi = calculateContextAwareRpi(mappedMatches[0]);
   assert.ok(rpi.rpiScore >= 80, `Expected mapped live match RPI >= 80, got ${rpi.rpiScore}`);
+
+  // 4. Map raw Riot /lol-match-history/v1/games/{gameId}/timeline frames to TimelineMinutePoint[]
+  const { mapRawTimelineToMinutePoints } = await import('./liveLcuAdapter');
+  const rawTimeline = {
+    frames: [
+      {
+        timestamp: 0,
+        participantFrames: {
+          '1': { participantId: 1, totalGold: 500, xp: 0 },
+          '6': { participantId: 6, totalGold: 500, xp: 0 },
+        },
+        events: [],
+      },
+      {
+        timestamp: 600_000,
+        participantFrames: {
+          '1': { participantId: 1, totalGold: 4200, xp: 3500 },
+          '6': { participantId: 6, totalGold: 3100, xp: 2900 },
+        },
+        events: [
+          { type: 'ELITE_MONSTER_KILL', monsterType: 'DRAGON', killerId: 1 },
+          { type: 'BUILDING_KILL', buildingType: 'TOWER_BUILDING', killerId: 1 },
+          { type: 'CHAMPION_KILL', killerId: 1, victimId: 6, assistingParticipantIds: [2] },
+        ],
+      },
+    ],
+  };
+  const timelinePoints = mapRawTimelineToMinutePoints(rawTimeline, rawGames[0]);
+  assert.equal(timelinePoints.length, 2);
+  assert.equal(timelinePoints[1].minute, 10);
+  assert.equal(timelinePoints[1].blueGold - timelinePoints[1].redGold, 1100);
+  assert.equal(timelinePoints[1].blueDragons, 1);
+  assert.equal(timelinePoints[1].blueTowers, 1);
 });
+
 
