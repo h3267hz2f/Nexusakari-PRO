@@ -20,11 +20,13 @@ import {
 } from '../core/telemetryFixtures';
 import {
   LootDisenchantPlan,
+  LootItemShard,
   SummonerScoutProfile,
 } from '../core/types';
 
 interface ClientToolkitWorkspaceProps {
   scoutProfiles: SummonerScoutProfile[];
+  lootShards?: LootItemShard[];
   activeRegion: string;
   installDirectory: string;
   onExecuteLootDisenchant: (plan: LootDisenchantPlan) => Promise<{
@@ -65,12 +67,18 @@ const SECONDARY_SPELL_BASE_CD: Record<string, number> = {
 
 export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
   scoutProfiles,
+  lootShards,
   activeRegion,
   installDirectory,
   onExecuteLootDisenchant,
   onApplyClientCosmetic,
   onCreatePracticeLobby,
 }) => {
+  const activeLootShards = useMemo(
+    () => (lootShards && lootShards.length > 0 ? lootShards : LOOT_SHARDS_INVENTORY),
+    [lootShards]
+  );
+
   const enemyPlayers = useMemo(
     () => scoutProfiles.filter((p) => p.teamSide === 'ENEMY'),
     [scoutProfiles]
@@ -195,8 +203,8 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
   const [isExecutingLoot, setIsExecutingLoot] = useState(false);
 
   const disenchantPlan = useMemo(
-    () => calculateLootDisenchantPlan(LOOT_SHARDS_INVENTORY, lootStrategy),
-    [lootStrategy]
+    () => calculateLootDisenchantPlan(activeLootShards, lootStrategy),
+    [activeLootShards, lootStrategy]
   );
 
   const handleRunDisenchant = async () => {
@@ -555,7 +563,7 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono tabular-nums">
-              {LOOT_SHARDS_INVENTORY.map((shard) => {
+              {activeLootShards.map((shard) => {
                 const cmd = disenchantPlan.lcuBatchCraftCommands.find(
                   (c) => c.lootId === shard.lootId
                 );

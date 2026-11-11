@@ -15,6 +15,7 @@ import {
   IpcEnvelope,
   LcuRcuCredentials,
   LootDisenchantPlan,
+  LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
   TriChannelStatus,
@@ -109,8 +110,28 @@ export const tauriBridgeClient = {
     blacklist: BlacklistEntry[];
     ringBuffer: IpcEnvelope[];
     scoutProfiles: SummonerScoutProfile[];
+    lootShards?: LootItemShard[];
+    liveClientConnected?: boolean;
   }> {
     return invokeOrFetch('get_bootstrap_state', {}, '/api/bridge/bootstrap');
+  },
+
+  async probeLiveClient(): Promise<{
+    connected: boolean;
+    message: string;
+    status: TriChannelStatus;
+    scoutProfiles: SummonerScoutProfile[];
+    lootShards: LootItemShard[];
+    ringBuffer: IpcEnvelope[];
+  }> {
+    return invokeOrFetch(
+      'probe_live_lcu_client',
+      {},
+      '/api/bridge/probe-live-client',
+      {
+        method: 'POST',
+      }
+    );
   },
 
   async setGameflowPhase(phase: GameflowPhase): Promise<{
@@ -146,6 +167,8 @@ export const tauriBridgeClient = {
 
   async updateCredentials(credentials: Partial<LcuRcuCredentials>): Promise<{
     status: TriChannelStatus;
+    scoutProfiles?: SummonerScoutProfile[];
+    lootShards?: LootItemShard[];
     ringBuffer: IpcEnvelope[];
   }> {
     return invokeOrFetch(

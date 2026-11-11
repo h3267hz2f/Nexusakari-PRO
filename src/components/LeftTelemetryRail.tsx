@@ -14,6 +14,7 @@ interface LeftTelemetryRailProps {
   onPhaseChange: (phase: GameflowPhase) => void;
   onRegionChange: (regionCode: string) => void;
   onUpdateCredentials: (creds: Partial<LcuRcuCredentials>) => void;
+  onProbeLiveClient?: () => Promise<{ connected: boolean; message: string }>;
 }
 
 const PHASE_OPTIONS: Array<{ phase: GameflowPhase; label: string; sub: string }> = [
@@ -30,11 +31,14 @@ export const LeftTelemetryRail: React.FC<LeftTelemetryRailProps> = ({
   onPhaseChange,
   onRegionChange,
   onUpdateCredentials,
+  onProbeLiveClient,
 }) => {
   const [editingCreds, setEditingCreds] = useState(false);
   const [lcuPortInput, setLcuPortInput] = useState(String(status.credentials.lcuPort));
   const [lcuTokenInput, setLcuTokenInput] = useState(status.credentials.lcuAuthToken);
   const [rcuPortInput, setRcuPortInput] = useState(String(status.credentials.rcuPort));
+  const [isProbing, setIsProbing] = useState(false);
+  const [probeMessage, setProbeMessage] = useState<string | null>(null);
 
   const handleSaveCreds = (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,6 +52,17 @@ export const LeftTelemetryRail: React.FC<LeftTelemetryRailProps> = ({
       rcuPort: Number.isFinite(parsedRcu) && parsedRcu > 0 ? parsedRcu : status.credentials.rcuPort,
     });
     setEditingCreds(false);
+  };
+
+  const handleProbeClick = async () => {
+    if (!onProbeLiveClient) return;
+    setIsProbing(true);
+    try {
+      const res = await onProbeLiveClient();
+      setProbeMessage(res.message);
+    } finally {
+      setIsProbing(false);
+    }
   };
 
   // SVG Ring calculation for Master 215 LP -> Grandmaster 500 LP threshold (43%)
@@ -186,8 +201,8 @@ export const LeftTelemetryRail: React.FC<LeftTelemetryRailProps> = ({
       </section>
 
       {/* Section 4: Tri-Channel LCU + RCU + :2999 Telemetry & 4-Tuple Editor */}
-      <section className="p-3.5 rounded-xl bg-gray-900/90 border border-slate-800/80">
-        <div className="flex items-center justify-between mb-2.5">
+      <section className="p-3.5 rounded-xl bg-gray-900/90 border border-slate-800/80 space-y-2.5">
+        <div className="flex items-center justify-between">
           <h3 className="font-display text-xs font-semibold text-slate-200">
             03. 三通道四元组进程桥接
           </h3>
@@ -248,6 +263,18 @@ export const LeftTelemetryRail: React.FC<LeftTelemetryRailProps> = ({
         ) : (
           <dl className="space-y-1.5 text-xs font-mono tabular-nums">
             <div className="flex items-center justify-between">
+              <dt className="text-slate-400">数据源模式</dt>
+              <dd
+                className={
+                  status.mode === 'tauri-native'
+                    ? 'text-emerald-400 font-semibold'
+                    : 'text-amber-400'
+                }
+              >
+                {status.mode === 'tauri-native' ? '真机 LCU 直连' : '全真复盘沙箱'}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between">
               <dt className="text-slate-400">LCU 进程端口</dt>
               <dd className="text-emerald-400">
                 127.0.0.1:{status.credentials.lcuPort} (PID {status.credentials.lcuPid})
@@ -279,7 +306,26 @@ export const LeftTelemetryRail: React.FC<LeftTelemetryRailProps> = ({
             </div>
           </dl>
         )}
+
+        {onProbeLiveClient && (
+          <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+            <button
+              type="button"
+              disabled={isProbing}
+              onClick={handleProbeClick}
+              className="w-full py-1.5 px-3 rounded-lg bg-slate-950 border border-sky-500/40 text-xs font-semibold text-sky-300 hover:bg-sky-500/15 transition-colors disabled:opacity-50"
+            >
+              {isProbing ? '正在扫描 LeagueClientUx.exe...' : '探测本地 LOL 进程并同步'}
+            </button>
+            {probeMessage && (
+              <p className="text-[11px] text-slate-400 leading-relaxed font-mono">
+                {probeMessage}
+              </p>
+            )}
+          </div>
+        )}
       </section>
     </aside>
   );
 };
+

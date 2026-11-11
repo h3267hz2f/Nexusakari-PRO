@@ -24,6 +24,7 @@ import {
   INITIAL_BLACKLIST_LEDGER,
   INITIAL_IPC_RING_BUFFER,
   INITIAL_TRI_CHANNEL_STATUS,
+  LOOT_SHARDS_INVENTORY,
 } from './core/telemetryFixtures';
 import {
   AiJudgePersona,
@@ -35,6 +36,7 @@ import {
   IpcEnvelope,
   LcuRcuCredentials,
   LootDisenchantPlan,
+  LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
   TriChannelStatus,
@@ -74,6 +76,9 @@ export function App() {
   const [scoutProfiles, setScoutProfiles] = useState<SummonerScoutProfile[]>(() =>
     buildHydratedScoutProfiles(INITIAL_BLACKLIST_LEDGER)
   );
+  const [lootShards, setLootShards] = useState<LootItemShard[]>(
+    LOOT_SHARDS_INVENTORY
+  );
   const [selectedPlayerPuuid, setSelectedPlayerPuuid] = useState<string | null>(
     () => buildHydratedScoutProfiles(INITIAL_BLACKLIST_LEDGER)[0]?.puuid ?? null
   );
@@ -90,6 +95,9 @@ export function App() {
         setBlacklist(res.blacklist);
         setRingBuffer(res.ringBuffer);
         setScoutProfiles(res.scoutProfiles);
+        if (res.lootShards && res.lootShards.length > 0) {
+          setLootShards(res.lootShards);
+        }
       })
       .catch(() => {
         // Fallback to deterministic initial fixtures if offline
@@ -98,6 +106,27 @@ export function App() {
       mounted = false;
     };
   }, []);
+
+  const handleProbeLiveClient = async (): Promise<{
+    connected: boolean;
+    message: string;
+  }> => {
+    try {
+      const res = await tauriBridgeClient.probeLiveClient();
+      setStatus(res.status);
+      setScoutProfiles(res.scoutProfiles);
+      if (res.lootShards && res.lootShards.length > 0) {
+        setLootShards(res.lootShards);
+      }
+      setRingBuffer(res.ringBuffer);
+      return { connected: res.connected, message: res.message };
+    } catch {
+      return {
+        connected: false,
+        message: '本地桥接网关未响应，当前维持全真排位复盘沙箱模式',
+      };
+    }
+  };
 
   const handlePhaseChange = async (phase: GameflowPhase) => {
     try {
@@ -133,6 +162,12 @@ export function App() {
     try {
       const res = await tauriBridgeClient.updateCredentials(creds);
       setStatus(res.status);
+      if (res.scoutProfiles && res.scoutProfiles.length > 0) {
+        setScoutProfiles(res.scoutProfiles);
+      }
+      if (res.lootShards && res.lootShards.length > 0) {
+        setLootShards(res.lootShards);
+      }
       setRingBuffer(res.ringBuffer);
     } catch {
       setStatus((prev) => ({
@@ -266,6 +301,7 @@ export function App() {
           onPhaseChange={handlePhaseChange}
           onRegionChange={handleRegionChange}
           onUpdateCredentials={handleUpdateCredentials}
+          onProbeLiveClient={handleProbeLiveClient}
         />
 
         <main className="flex-1 min-w-0 p-6 overflow-y-auto">
@@ -308,6 +344,7 @@ export function App() {
           {activeTab === 'client-toolkit' && (
             <ClientToolkitWorkspace
               scoutProfiles={scoutProfiles}
+              lootShards={lootShards}
               activeRegion={status.activeRegion}
               installDirectory={status.credentials.installDirectory}
               onExecuteLootDisenchant={handleExecuteLootDisenchant}

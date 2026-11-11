@@ -160,3 +160,137 @@ test('Slice-1.5: Lobby Chat Obfuscator, Spell Haste Cooldown, ARAM EHP & Loot Di
   assert.ok(lootPlan.totalBlueEssenceYield > 14000);
   assert.equal(lootPlan.totalOrangeEssenceYield, 540);
 });
+
+test('Slice-1.6: Live LCU Command-Line Parser & Riot Raw JSON-to-Domain Mappers', async () => {
+  const {
+    parseCommandLineToCredentials,
+    mapRawLcuLootToShards,
+    mapRawLcuGamesToMatchStats,
+  } = await import('./liveLcuAdapter');
+
+  // 1. Parse Windows LeagueClientUx.exe command line into 4-Tuple
+  const sampleCmd =
+    '"D:\\WeGameApps\\英雄联盟\\LeagueClient\\LeagueClientUx.exe" "--app-port=54321" "--remoting-auth-token=RealSecretToken99" "--riotclient-app-port=54322" "--riotclient-auth-token=RcuToken88" "--rso_platform_id=HN1" "--region=TENCENT_HN1" "--app-pid=18888"';
+  const creds = parseCommandLineToCredentials(sampleCmd, 18888);
+  assert.ok(creds, 'Credentials should be extracted from valid command line');
+  assert.equal(creds!.lcuPort, 54321);
+  assert.equal(creds!.lcuAuthToken, 'RealSecretToken99');
+  assert.equal(creds!.rcuPort, 54322);
+  assert.equal(creds!.rcuAuthToken, 'RcuToken88');
+  assert.equal(creds!.rsoPlatformId, 'HN1');
+
+  // 2. Map raw Riot /lol-loot/v1/player-loot-map JSON to LootItemShard[]
+  const rawLootMap = {
+    CHAMPION_RENTAL_203: {
+      lootId: 'CHAMPION_RENTAL_203',
+      localizedName: '千珏 英雄碎片',
+      type: 'CHAMPION_RENTAL',
+      count: 3,
+      disenchantValue: 960,
+      upgradeEssenceValue: 2880,
+      itemStatus: 'OWNED',
+    },
+    CHAMPION_SKIN_RENTAL_103085: {
+      lootId: 'CHAMPION_SKIN_RENTAL_103085',
+      localizedName: '殿堂传奇 阿狸 皮肤碎片',
+      type: 'CHAMPION_SKIN_RENTAL',
+      count: 1,
+      disenchantValue: 650,
+      upgradeEssenceValue: 2950,
+      itemStatus: 'NONE',
+    },
+  };
+  const mappedShards = mapRawLcuLootToShards(rawLootMap);
+  assert.equal(mappedShards.length, 2);
+  assert.equal(mappedShards[0].disenchantCurrency, 'BLUE_ESSENCE');
+  assert.equal(mappedShards[0].isOwnedChampionOrSkin, true);
+  assert.equal(mappedShards[1].disenchantCurrency, 'ORANGE_ESSENCE');
+  assert.equal(mappedShards[1].isOwnedChampionOrSkin, false);
+
+  // 3. Map raw Riot /lol-match-history/v1/products/lol/{puuid}/matches JSON to MatchParticipantStats[] + Context-Aware RPI
+  const rawGames = [
+    {
+      gameId: 99887766,
+      gameDuration: 1800,
+      gameCreation: Date.now() - 3600_000,
+      participantIdentities: [
+        { participantId: 1, player: { puuid: 'puuid-test-carry', gameName: 'TestCarry' } },
+        { participantId: 2, player: { puuid: 'puuid-ally-2', gameName: 'Ally2' } },
+      ],
+      participants: [
+        {
+          participantId: 1,
+          teamId: 100,
+          championId: 203,
+          timeline: { lane: 'JUNGLE', role: 'NONE' },
+          stats: {
+            win: true,
+            kills: 12,
+            deaths: 2,
+            assists: 10,
+            goldEarned: 15500,
+            totalDamageDealtToChampions: 38000,
+            totalDamageTaken: 24000,
+            damageSelfMitigated: 18000,
+            visionScore: 42,
+            wardsPlaced: 14,
+            wardsKilled: 8,
+            visionWardsBoughtInGame: 5,
+            totalMinionsKilled: 45,
+            neutralMinionsKilled: 165,
+            turretKills: 3,
+            inhibitorKills: 1,
+            timeCCingOthers: 28,
+            firstBloodKill: true,
+            perk0: 8005,
+            perk0Var1: 3120,
+            perk0Var2: 1840,
+            perk0Var3: 0,
+            perkPrimaryStyle: 8000,
+            perkSubStyle: 8100,
+          },
+        },
+        {
+          participantId: 2,
+          teamId: 100,
+          championId: 516,
+          timeline: { lane: 'TOP', role: 'SOLO' },
+          stats: {
+            win: true,
+            kills: 3,
+            deaths: 4,
+            assists: 15,
+            goldEarned: 11500,
+            totalDamageDealtToChampions: 19000,
+            totalDamageTaken: 41000,
+            damageSelfMitigated: 52000,
+            visionScore: 28,
+            wardsPlaced: 10,
+            wardsKilled: 3,
+            visionWardsBoughtInGame: 3,
+            totalMinionsKilled: 180,
+            neutralMinionsKilled: 12,
+            turretKills: 2,
+            inhibitorKills: 0,
+            timeCCingOthers: 55,
+            firstBloodKill: false,
+          },
+        },
+      ],
+    },
+  ];
+
+  const mappedMatches = mapRawLcuGamesToMatchStats(
+    rawGames,
+    'puuid-test-carry',
+    RoleType.JGL
+  );
+  assert.equal(mappedMatches.length, 1);
+  assert.equal(mappedMatches[0].championName, '千珏');
+  assert.equal(mappedMatches[0].role, RoleType.JGL);
+  assert.equal(mappedMatches[0].kills, 12);
+
+  const rpi = calculateContextAwareRpi(mappedMatches[0]);
+  assert.ok(rpi.rpiScore >= 80, `Expected mapped live match RPI >= 80, got ${rpi.rpiScore}`);
+});
+

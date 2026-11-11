@@ -20,9 +20,22 @@ import {
   INITIAL_BLACKLIST_LEDGER,
   INITIAL_IPC_RING_BUFFER,
   INITIAL_TRI_CHANNEL_STATUS,
+  LOOT_SHARDS_INVENTORY,
   RUNE_PAGE_PRESETS,
   SGP_REGION_REGISTRY,
 } from './src/core/telemetryFixtures';
+import {
+  callLiveLcuEndpoint,
+  executeRealChatBroadcast,
+  executeRealCosmeticSpoof,
+  executeRealLootDisenchant,
+  executeRealPracticeLobby,
+  executeRealRuneInjection,
+  fetchLiveLootInventory,
+  fetchLiveSessionAndScoutProfiles,
+  performInsecureLocalHttps,
+  scanLiveLcuProcessCredentials,
+} from './src/core/liveLcuAdapter';
 import {
   AiJudgePersona,
   AiJudgeReport,
@@ -30,6 +43,7 @@ import {
   BlacklistEntry,
   GameflowPhase,
   IpcEnvelope,
+  LootItemShard,
   SummonerScoutProfile,
   ThrowPointEvidence,
   TriChannelStatus,
@@ -64,6 +78,11 @@ const RING_BUFFER_CAPACITY = 256;
 let ipcRingBuffer: IpcEnvelope[] = [...INITIAL_IPC_RING_BUFFER];
 let ipcCounter = 100;
 
+// Live LCU state when connected to a real LeagueClientUx.exe on 127.0.0.1
+let liveClientConnected = false;
+let liveScoutProfiles: SummonerScoutProfile[] | null = null;
+let liveLootShards: LootItemShard[] | null = null;
+
 function pushIpcEnvelope(
   channel: IpcEnvelope['channel'],
   method: string,
@@ -90,6 +109,119 @@ function pushIpcEnvelope(
   return env;
 }
 
+function recordAdapterEnvelope(env: Omit<IpcEnvelope, 'id' | 'timestamp'>) {
+  pushIpcEnvelope(
+    env.channel,
+    env.method,
+    env.endpoint,
+    env.status,
+    env.durationMs,
+    env.payloadSummary
+  );
+}
+
+/**
+ * Probes OS process table for LeagueClientUx.exe or tests currently configured 127.0.0.1:{lcuPort},
+ * then pulls live session profiles and Hextech Loot shards if a real client responds.
+ */
+async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
+  connected: boolean;
+  message: string;
+}> {
+  if (preferProcessScan) {
+    const scanned = await scanLiveLcuProcessCredentials();
+    if (scanned) {
+      triChannelStatus.credentials = scanned;
+    } else {
+      liveClientConnected = false;
+      liveScoutProfiles = null;
+      liveLootShards = null;
+      triChannelStatus.mode = 'protocol-replay';
+      pushIpcEnvelope(
+        'TAURI_CMD',
+        'PROBE',
+        'os://process-table/LeagueClientUx.exe',
+        404,
+        1.2,
+        '未检测到本地运行中的 LeagueClientUx.exe 进程，已自动挂载高分段 10 人全真排位复盘沙箱数据'
+      );
+      return {
+        connected: false,
+        message:
+          '当前机器未检测到运行中的 LeagueClientUx.exe 进程，已保持全真排位复盘沙箱模式',
+      };
+    }
+  }
+
+  const creds = triChannelStatus.credentials;
+
+  try {
+    const summonerProbe = await callLiveLcuEndpoint<any>(
+      creds,
+      'GET',
+      '/lol-summoner/v1/current-summoner',
+      undefined,
+      recordAdapterEnvelope
+    );
+
+    if (summonerProbe.ok && summonerProbe.data) {
+      liveClientConnected = true;
+      triChannelStatus.mode = 'tauri-native';
+      triChannelStatus.lcuConnected = true;
+
+      const sessionRes = await fetchLiveSessionAndScoutProfiles(
+        creds,
+        recordAdapterEnvelope
+      );
+      triChannelStatus.gameflowPhase = sessionRes.phase;
+      if (sessionRes.profiles && sessionRes.profiles.length > 0) {
+        liveScoutProfiles = sessionRes.profiles;
+      }
+
+      // Also probe :2999 live client data
+      const live2999 = await performInsecureLocalHttps({
+        port: 2999,
+        path: '/liveclientdata/allgamedata',
+        timeoutMs: 1200,
+      }).catch(() => ({ ok: false }));
+      triChannelStatus.liveClient2999Active = Boolean(live2999.ok);
+
+      // Pull live Hextech Loot inventory
+      const shards = await fetchLiveLootInventory(creds, recordAdapterEnvelope);
+      if (shards && shards.length > 0) {
+        liveLootShards = shards;
+      }
+
+      const sumName = String(
+        summonerProbe.data.gameName || summonerProbe.data.displayName || '当前召唤师'
+      );
+      return {
+        connected: true,
+        message: `已成功直连本地 LeagueClientUx.exe (${sumName} · 127.0.0.1:${creds.lcuPort}) · 阶段 ${sessionRes.phase}`,
+      };
+    }
+  } catch {
+    // Local LeagueClientUx.exe is not running or port is unreachable
+  }
+
+  liveClientConnected = false;
+  liveScoutProfiles = null;
+  liveLootShards = null;
+  triChannelStatus.mode = 'protocol-replay';
+  pushIpcEnvelope(
+    'TAURI_CMD',
+    'PROBE',
+    `https://127.0.0.1:${creds.lcuPort}`,
+    404,
+    3.5,
+    '未检测到本地运行中的 LeagueClientUx.exe 进程，已自动挂载高分段 10 人全真排位复盘沙箱数据'
+  );
+  return {
+    connected: false,
+    message: `当前机器未检测到运行中的 LeagueClientUx.exe (或端口 127.0.0.1:${creds.lcuPort} 未响应)，已保持全真排位复盘沙箱模式`,
+  };
+}
+
 const CHAMPION_NAME_MAP: Record<number, string> = {
   53: '布里茨 (机器人)',
   64: '李青 (盲僧)',
@@ -112,6 +244,9 @@ const CHAMPION_NAME_MAP: Record<number, string> = {
 };
 
 function getCurrentScoutProfiles(): SummonerScoutProfile[] {
+  if (liveClientConnected && liveScoutProfiles && liveScoutProfiles.length > 0) {
+    return liveScoutProfiles;
+  }
   const hydrated = buildHydratedScoutProfiles(blacklistLedger);
   // In CHAMP_SELECT phase, enemy players have isAnonymousInBp = true;
   // Once in IN_PROGRESS or END_OF_GAME, enemy PUUIDs are unlocked via /lol-gameflow/v1/session!
@@ -123,6 +258,13 @@ function getCurrentScoutProfiles(): SummonerScoutProfile[] {
     ...p,
     isAnonymousInBp: p.teamSide === 'ENEMY' ? !unlockEnemies : false,
   }));
+}
+
+function getCurrentLootShards(): LootItemShard[] {
+  if (liveClientConnected && liveLootShards && liveLootShards.length > 0) {
+    return liveLootShards;
+  }
+  return LOOT_SHARDS_INVENTORY;
 }
 
 function buildDeterministicFallbackJudgeReport(
@@ -207,6 +349,21 @@ async function startServer() {
       blacklist: blacklistLedger,
       ringBuffer: ipcRingBuffer,
       scoutProfiles: getCurrentScoutProfiles(),
+      lootShards: getCurrentLootShards(),
+      liveClientConnected,
+    });
+  });
+
+  // 1b. Probe Live OS Process Table & Sync Real LeagueClientUx.exe
+  app.post('/api/bridge/probe-live-client', async (_req, res) => {
+    const result = await probeAndSyncLiveClient(true);
+    res.json({
+      connected: result.connected,
+      message: result.message,
+      status: triChannelStatus,
+      scoutProfiles: getCurrentScoutProfiles(),
+      lootShards: getCurrentLootShards(),
+      ringBuffer: ipcRingBuffer,
     });
   });
 
@@ -259,8 +416,8 @@ async function startServer() {
     });
   });
 
-  // 4. Update LCU/RCU 4-Tuple Credentials
-  app.post('/api/bridge/credentials', (req, res) => {
+  // 4. Update LCU/RCU 4-Tuple Credentials & Test Live Connection
+  app.post('/api/bridge/credentials', async (req, res) => {
     const { credentials } = req.body;
     if (credentials) {
       triChannelStatus.credentials = {
@@ -268,17 +425,20 @@ async function startServer() {
         ...credentials,
         lastHeartbeatAt: new Date().toISOString(),
       };
+      const probeRes = await probeAndSyncLiveClient(false);
       pushIpcEnvelope(
         'TAURI_CMD',
         'HANDSHAKE',
         `https://127.0.0.1:${triChannelStatus.credentials.lcuPort}`,
-        200,
+        probeRes.connected ? 200 : 202,
         3.2,
-        `Re-bound 4-Tuple Credentials: LCU(:${triChannelStatus.credentials.lcuPort}) + RCU(:${triChannelStatus.credentials.rcuPort})`
+        probeRes.message
       );
     }
     res.json({
       status: triChannelStatus,
+      scoutProfiles: getCurrentScoutProfiles(),
+      lootShards: getCurrentLootShards(),
       ringBuffer: ipcRingBuffer,
     });
   });
@@ -364,10 +524,31 @@ async function startServer() {
     });
   });
 
-  // 7. Auto-Rune Hot Injection
-  app.post('/api/bridge/inject-rune', (req, res) => {
+  // 7. Auto-Rune Hot Injection (Real LCU + Replay Fallback)
+  app.post('/api/bridge/inject-rune', async (req, res) => {
     const { presetId } = req.body as { presetId: string };
     const preset = RUNE_PAGE_PRESETS.find((r) => r.id === presetId) ?? RUNE_PAGE_PRESETS[0];
+
+    if (liveClientConnected) {
+      const ok = await executeRealRuneInjection(
+        triChannelStatus.credentials,
+        {
+          pageName: preset.pageName,
+          primaryStyleId: preset.primaryStyleId,
+          subStyleId: preset.subStyleId,
+          selectedPerkIds: preset.selectedPerkIds,
+        },
+        recordAdapterEnvelope
+      );
+      res.json({
+        success: ok,
+        message: ok
+          ? `已向真机客户端热写入符文页【${preset.pageName}】（胜率 ${preset.winRate}%）`
+          : `真机符文写入返回非 200 状态，请检查客户端符文页槽位`,
+        ringBuffer: ipcRingBuffer,
+      });
+      return;
+    }
 
     pushIpcEnvelope(
       'LCU_REST',
@@ -385,11 +566,27 @@ async function startServer() {
     });
   });
 
-  // 8. Lobby Chat Anti-Censorship Broadcast
-  app.post('/api/bridge/broadcast-chat', (req, res) => {
+  // 8. Lobby Chat Anti-Censorship Broadcast (Real LCU + Replay Fallback)
+  app.post('/api/bridge/broadcast-chat', async (req, res) => {
     const { mode, lines } = req.body as { mode: string; lines: string[] };
-    const count = Array.isArray(lines) ? lines.length : 0;
+    const safeLines = Array.isArray(lines) ? lines : [];
 
+    if (liveClientConnected && safeLines.length > 0) {
+      const deliveredCount = await executeRealChatBroadcast(
+        triChannelStatus.credentials,
+        safeLines,
+        recordAdapterEnvelope
+      );
+      res.json({
+        success: deliveredCount > 0,
+        deliveredCount,
+        throttleIntervalMs: 350,
+        ringBuffer: ipcRingBuffer,
+      });
+      return;
+    }
+
+    const count = safeLines.length;
     pushIpcEnvelope(
       'LCU_REST',
       'POST',
@@ -407,8 +604,8 @@ async function startServer() {
     });
   });
 
-  // 9. ARAM <5ms Bench Diff Sniper & Instant Rollback
-  app.post('/api/bridge/aram-snipe', (req, res) => {
+  // 9. ARAM <5ms Bench Diff Sniper & Instant Rollback (Real LCU + Replay Fallback)
+  app.post('/api/bridge/aram-snipe', async (req, res) => {
     const { action, currentChampionId, targetChampionId, benchPoolIds } = req.body as {
       action: 'REROLL' | 'MANUAL_SWAP' | 'ROLLBACK';
       currentChampionId: number;
@@ -421,6 +618,30 @@ async function startServer() {
     let newChampId = currentChampionId;
     let swapped = false;
     const elapsedMicroseconds = Math.floor(1800 + Math.random() * 2400); // 1.8ms - 4.2ms
+
+    if (liveClientConnected) {
+      if (action === 'REROLL') {
+        await callLiveLcuEndpoint(
+          triChannelStatus.credentials,
+          'POST',
+          '/lol-champ-select/v1/session/my-selection/reroll',
+          undefined,
+          recordAdapterEnvelope
+        );
+      } else if (targetChampionId) {
+        const swapRes = await callLiveLcuEndpoint(
+          triChannelStatus.credentials,
+          'POST',
+          `/lol-champ-select/v1/session/bench/swap/${targetChampionId}`,
+          undefined,
+          recordAdapterEnvelope
+        );
+        if (swapRes.ok) {
+          swapped = true;
+          newChampId = targetChampionId;
+        }
+      }
+    }
 
     if (action === 'REROLL') {
       // Pick a random champion not currently held to simulate rolling into the bench
@@ -495,12 +716,29 @@ async function startServer() {
     });
   });
 
-  // 10. Hextech Loot Mass Disenchant
-  app.post('/api/bridge/loot-disenchant', (req, res) => {
+  // 10. Hextech Loot Mass Disenchant (Real LCU + Replay Fallback)
+  app.post('/api/bridge/loot-disenchant', async (req, res) => {
     const { plan } = req.body;
-    const count = plan?.lcuBatchCraftCommands?.length ?? 0;
+    const commands = plan?.lcuBatchCraftCommands ?? [];
+    const count = commands.length;
     const be = plan?.totalBlueEssenceYield ?? 0;
     const oe = plan?.totalOrangeEssenceYield ?? 0;
+
+    if (liveClientConnected && plan && count > 0) {
+      const craftedCount = await executeRealLootDisenchant(
+        triChannelStatus.credentials,
+        plan,
+        recordAdapterEnvelope
+      );
+      res.json({
+        success: craftedCount > 0,
+        craftedRecipesCount: craftedCount,
+        blueEssenceAdded: be,
+        orangeEssenceAdded: oe,
+        ringBuffer: ipcRingBuffer,
+      });
+      return;
+    }
 
     pushIpcEnvelope(
       'LCU_REST',
@@ -520,13 +758,43 @@ async function startServer() {
     });
   });
 
-  // 11. Client Cosmetic Spoofing (Background Skin & Ranked Tier)
-  app.post('/api/bridge/cosmetic-spoof', (req, res) => {
-    const { skinSplashId, skinName, spoofTier, spoofDivision, spoofLp } = req.body;
+  // 11. Client Cosmetic Spoofing (Background Skin & Ranked Tier, Real LCU + Replay Fallback)
+  app.post('/api/bridge/cosmetic-spoof', async (req, res) => {
+    const {
+      skinSplashId,
+      skinName,
+      spoofTier,
+      spoofDivision,
+      spoofLp,
+      challengeCrystalLevel,
+      statusMessage,
+    } = req.body;
+
     const endpoints = [
       '/lol-summoner/v1/current-summoner/summoner-profile',
       '/lol-chat/v1/me',
     ];
+
+    if (liveClientConnected) {
+      const ok = await executeRealCosmeticSpoof(
+        triChannelStatus.credentials,
+        {
+          skinSplashId,
+          spoofTier,
+          spoofDivision,
+          spoofLp,
+          challengeCrystalLevel,
+          statusMessage,
+        },
+        recordAdapterEnvelope
+      );
+      res.json({
+        success: ok,
+        lcuEndpointsCalled: endpoints,
+        ringBuffer: ipcRingBuffer,
+      });
+      return;
+    }
 
     pushIpcEnvelope(
       'LCU_REST',
@@ -544,9 +812,27 @@ async function startServer() {
     });
   });
 
-  // 12. 5v5 Practice Tool Custom Lobby Builder
-  app.post('/api/bridge/practice-lobby', (req, res) => {
+  // 12. 5v5 Practice Tool Custom Lobby Builder (Real LCU + Replay Fallback)
+  app.post('/api/bridge/practice-lobby', async (req, res) => {
     const { lobbyName, botCount } = req.body;
+
+    if (liveClientConnected) {
+      const ok = await executeRealPracticeLobby(
+        triChannelStatus.credentials,
+        lobbyName,
+        recordAdapterEnvelope
+      );
+      res.json({
+        success: ok,
+        lobbyId: `LIVE-LCU-${Date.now().toString().slice(-6)}`,
+        message: ok
+          ? `已通过真机 LCU /lol-lobby/v2/lobby 创建 5v5 自定义训练模式房间【${lobbyName}】`
+          : `真机训练房创建请求已发送，请确认当前客户端处于大厅空闲状态`,
+        ringBuffer: ipcRingBuffer,
+      });
+      return;
+    }
+
     pushIpcEnvelope(
       'LCU_REST',
       'POST',
@@ -779,6 +1065,7 @@ async function startServer() {
   const PORT = 3000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`NexusAkari Pro v4 Isomorphic Bridge & AI Server running at http://localhost:${PORT}`);
+    void probeAndSyncLiveClient(true);
   });
 }
 
