@@ -4,7 +4,12 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { AramSnipeResult, LiveAramSessionDto } from '../bridge/tauriClient';
+import {
+  AramSnipeResult,
+  ExternalMetaOverviewDto,
+  LiveAramSessionDto,
+  tauriBridgeClient,
+} from '../bridge/tauriClient';
 import {
   ALL_CHAMPIONS_SORTED,
   buildAramBalanceForChampion,
@@ -14,7 +19,7 @@ import {
   ARAM_BALANCE_DATABASE,
   ARENA_AUGMENTS_DATABASE,
 } from '../core/telemetryFixtures';
-import { AutomationConfig } from '../core/types';
+import { AramChampionBalance, AutomationConfig } from '../core/types';
 
 interface AramArenaWorkspaceProps {
   automation: AutomationConfig;
@@ -50,6 +55,33 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
   const [arenaRarityFilter, setArenaRarityFilter] = useState<ArenaRarityFilter>('ALL');
   const [arenaSearch, setArenaSearch] = useState<string>('');
 
+  const [externalOverview, setExternalOverview] =
+    useState<ExternalMetaOverviewDto | null>(null);
+  const [syncingExternal, setSyncingExternal] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    tauriBridgeClient
+      .getExternalOverview()
+      .then((res) => {
+        if (!cancelled) setExternalOverview(res.overview);
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleForceSyncExternal = async () => {
+    setSyncingExternal(true);
+    try {
+      const res = await tauriBridgeClient.syncExternalData();
+      setExternalOverview(res.overview);
+    } finally {
+      setSyncingExternal(false);
+    }
+  };
+
   // Automatically sync live ARAM session from /lol-champ-select/v1/session when connected
   useEffect(() => {
     if (!liveAramSession) return;
@@ -62,24 +94,52 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
   }, [liveAramSession]);
 
   const full169AramMap = useMemo(() => {
+    const liveMap = new Map<
+      number,
+      ExternalMetaOverviewDto['aramBalanceList'][number]
+    >();
+    if (externalOverview?.aramBalanceList) {
+      for (const item of externalOverview.aramBalanceList) {
+        liveMap.set(item.championId, item);
+      }
+    }
+
     const map = new Map<
       number,
       {
-        entry: (typeof ARAM_BALANCE_DATABASE)[number];
+        entry: AramChampionBalance & {
+          opggPlayCount?: number;
+          opggKda?: number;
+          opggRank?: number;
+          dataSource?: string;
+        };
         metrics: ReturnType<typeof calculateAramEhpMetrics>;
         isFeatured: boolean;
       }
     >();
     for (const entry of ARAM_BALANCE_DATABASE) {
+      const live = liveMap.get(entry.championId);
+      const mergedEntry = live
+        ? {
+            ...entry,
+            baseWinRate: live.baseWinRate,
+            pickRate: live.pickRate,
+            opggPlayCount: live.opggPlayCount,
+            opggKda: live.opggKda,
+            opggRank: live.opggRank,
+            dataSource: live.dataSource,
+          }
+        : entry;
       map.set(entry.championId, {
-        entry,
-        metrics: calculateAramEhpMetrics(entry),
+        entry: mergedEntry,
+        metrics: calculateAramEhpMetrics(mergedEntry),
         isFeatured: true,
       });
     }
     for (const champ of ALL_CHAMPIONS_SORTED) {
       if (!map.has(champ.id)) {
-        const fallbackEntry = buildAramBalanceForChampion(champ.id);
+        const live = liveMap.get(champ.id);
+        const fallbackEntry = live || buildAramBalanceForChampion(champ.id);
         map.set(champ.id, {
           entry: fallbackEntry,
           metrics: calculateAramEhpMetrics(fallbackEntry),
@@ -88,7 +148,7 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
       }
     }
     return map;
-  }, []);
+  }, [externalOverview]);
 
   const aramEnrichedList = useMemo(() => {
     return Array.from(full169AramMap.values()).sort(
@@ -390,6 +450,33 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
 
       {/* Row 2: ARAM Full Champion Balance & Effective Health Pool (EHP) Truth Table */}
       <section className="p-5 rounded-xl bg-gray-900/90 border border-slate-800/80">
+        {/* Live 4-Source External API Telemetry Strip */}
+        {externalOverview && (
+          <div className="mb-4 p-3 rounded-lg bg-slate-950 border border-slate-800/90 flex flex-wrap items-center justify-between gap-3 text-xs font-mono tabular-nums">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sky-400 font-semibold">
+                外部实时数据源已接入 (Patch {externalOverview.ddragonVersion})：
+              </span>
+              {externalOverview.sources.map((src) => (
+                <span
+                  key={src.provider}
+                  className={src.healthy ? 'text-emerald-400' : 'text-amber-400'}
+                >
+                  {src.provider} [{src.httpStatus || 200} · {src.latencyMs}ms · {src.cachedCount}项]
+                </span>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleForceSyncExternal}
+              disabled={syncingExternal}
+              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-sans font-semibold transition-colors whitespace-nowrap disabled:opacity-50"
+            >
+              {syncingExternal ? '正在刷新四源 API...' : '重刷 OP.GG / DDragon / 腾讯GTImg'}
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
           <div>
             <h2 className="font-display text-base font-bold text-slate-100">
@@ -471,8 +558,11 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
                       <div className="font-bold text-slate-100">
                         [{metrics.tierGrade}] {entry.championName}
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        {entry.roleClass} · 胜率 {(entry.baseWinRate * 100).toFixed(1)}%
+                      <div className="text-[11px] text-slate-400 font-mono tabular-nums">
+                        {entry.roleClass} · OP.GG胜率 {(entry.baseWinRate * 100).toFixed(2)}%
+                        {entry.opggPlayCount
+                          ? ` (${entry.opggPlayCount.toLocaleString()}场 · #${entry.opggRank})`
+                          : ''}
                       </div>
                     </td>
                     <td

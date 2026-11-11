@@ -393,5 +393,20 @@ test('Slice-1.7: Complete 169-Champion Catalog, 65-Rune Perk Dictionary, Adaptiv
   assert.ok(specRes.gameId.length >= 6);
 });
 
+test('Slice-1.8: 4-Source External Live LoL API Engine (OP.GG Ranked/ARAM, Riot DataDragon, Tencent GTImg, CommunityDragon)', async () => {
+  const { syncExternalLoLDataSources, fetchExternalChampionBuild } = await import(
+    './externalDataEngine'
+  );
 
+  const synced = await syncExternalLoLDataSources(true);
+  assert.ok(synced.overview.ddragonVersion.length >= 4);
+  assert.equal(synced.overview.sources.length, 4);
+  assert.ok(synced.overview.rankedTierList.length >= 169);
+  assert.ok(synced.overview.aramBalanceList.length >= 169);
 
+  const aatroxBuild = await fetchExternalChampionBuild(266, 'TOP');
+  assert.equal(aatroxBuild.detail.championId, 266);
+  assert.equal(aatroxBuild.detail.position, 'TOP');
+  assert.ok(aatroxBuild.detail.runeBuilds.length >= 1);
+  assert.equal(aatroxBuild.detail.runeBuilds[0].selectedPerkIds.length, 9);
+});

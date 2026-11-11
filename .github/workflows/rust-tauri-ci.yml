@@ -15,7 +15,7 @@ env:
 
 jobs:
   ts-math-and-web-build:
-    name: TypeScript v4 Math Unit Tests & Vite Build
+    name: TypeScript v4 Math, External API & Vite Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -32,7 +32,7 @@ jobs:
       - name: TypeScript Strict Typecheck (tsc --noEmit)
         run: npm run lint
 
-      - name: Run Deterministic v4 Math Engine & Live LCU Adapter Unit Tests (node:test)
+      - name: Run Deterministic v4 Math Engine & External API Unit Tests (node:test)
         run: npx --yes tsx --test src/core/mathEngine.test.ts
 
       - name: Build Production Frontend & Self-Contained Bridge Bundle
@@ -41,7 +41,7 @@ jobs:
           npm run build:server
 
   rust-tauri-kernel-test:
-    name: Rust Kernel Unit Tests & Clippy Audit (${{ matrix.os }})
+    name: Rust + Tauri 2 Kernel Unit Tests & Clippy Audit (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -51,10 +51,29 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Install Tauri 2 System Dependencies (Ubuntu WebKit2GTK 4.1)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
       - name: Setup Rust Stable Toolchain (rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Prepare frontendDist Directory for tauri::generate_context! Macro
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ ! -f dist/index.html ]; then
+            echo "<!doctype html><html><head><title>NexusAkari Pro</title></head><body></body></html>" > dist/index.html
+          fi
 
       - name: Run Rust Core Unit Tests (SafeBan FSM, WAMP Prefix Filter, TokenBucket, Bench Sniper)
         working-directory: ./src-tauri
@@ -65,7 +84,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   windows-desktop-installer:
-    name: Build Windows x64 Setup.exe & Portable.zip Bundle
+    name: Build Tauri 2 Native Windows x64 NSIS / MSI & Portable Bundles
     needs: [ts-math-and-web-build, rust-tauri-kernel-test]
     runs-on: windows-latest
     steps:
@@ -80,23 +99,32 @@ jobs:
       - name: Setup Rust Stable Toolchain (x86_64-pc-windows-msvc)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Node Dependencies & Build Frontend + Standalone Bridge
+      - name: Install Node Dependencies & Build Frontend + Standalone Bridge Sidecar
         run: |
           npm install --legacy-peer-deps
           npm run build
           npm run build:server
 
-      - name: Compile Native Windows x64 Release Binaries (nexus-akari-pro.exe & setup_stub.exe)
-        working-directory: ./src-tauri
-        run: cargo build --release --bins
-
-      - name: Smoke-Test Native Windows Executables
+      - name: Stage Sidecar Runtime into src-tauri/runtime for Tauri 2 Bundler
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "src-tauri/runtime" | Out-Null
+          Copy-Item "dist-server/server.cjs" "src-tauri/runtime/server.cjs" -Force
+          $nodePath = (Get-Command node).Source
+          Copy-Item $nodePath "src-tauri/runtime/node.exe" -Force
+
+      - name: Build Official Tauri 2 Native NSIS & MSI Installers (@tauri-apps/cli@2)
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis,msi
+
+      - name: Compile setup_stub.exe & Run Smoke Tests on Native Executables
+        shell: pwsh
+        run: |
+          cargo build --release --bin setup_stub --manifest-path src-tauri/Cargo.toml
           ./src-tauri/target/release/nexus-akari-pro.exe --smoke-test
           ./src-tauri/target/release/setup_stub.exe --smoke-test
 
-      - name: Stage Self-Contained Windows Distribution & Assemble Setup.exe + Portable.zip
+      - name: Collect Tauri 2 NSIS/MSI Installers + Portable.zip & SFX Setup.exe
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -104,12 +132,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path "release-stage/runtime" | Out-Null
           New-Item -ItemType Directory -Force -Path "release-bundles" | Out-Null
 
+          # 1. Copy official Tauri 2 NSIS & MSI bundles produced by `tauri build`
+          if (Test-Path "src-tauri/target/release/bundle/nsis") {
+            Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" "release-bundles/" -Force
+          }
+          if (Test-Path "src-tauri/target/release/bundle/msi") {
+            Copy-Item "src-tauri/target/release/bundle/msi/*.msi" "release-bundles/" -Force
+          }
+
+          # 2. Assemble Portable.zip and self-contained SFX Setup.exe
           Copy-Item "src-tauri/target/release/nexus-akari-pro.exe" "release-stage/nexus-akari-pro.exe" -Force
           Copy-Item "dist/*" "release-stage/dist/" -Recurse -Force
-          Copy-Item "dist-server/server.cjs" "release-stage/runtime/server.cjs" -Force
-
-          $nodePath = (Get-Command node).Source
-          Copy-Item $nodePath "release-stage/runtime/node.exe" -Force
+          Copy-Item "src-tauri/runtime/*" "release-stage/runtime/" -Recurse -Force
 
           Set-Content -Path "release-stage/Start-NexusAkari-Pro.cmd" -Value "@echo off`r`nstart `"`" `"%~dp0nexus-akari-pro.exe`"" -Encoding ASCII
 
@@ -132,12 +166,13 @@ jobs:
 
           Get-ChildItem release-bundles | Format-Table Name, Length -AutoSize
 
-      - name: Upload Windows x64 Setup.exe & Portable.zip Artifacts
+      - name: Upload Tauri 2 Windows x64 NSIS, MSI, Setup.exe & Portable.zip Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: NexusAkari-Pro-v4.0.0-Windows-x64-Installer
           path: |
-            release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe
-            release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip
+            release-bundles/*.exe
+            release-bundles/*.msi
+            release-bundles/*.zip
           if-no-files-found: error
           retention-days: 30

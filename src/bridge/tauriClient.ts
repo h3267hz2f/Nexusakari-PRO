@@ -94,12 +94,139 @@ export interface SpectatorLaunchResult {
   ringBuffer: IpcEnvelope[];
 }
 
+export interface ExternalSourceStatusDto {
+  provider: 'OPGG_KR_API' | 'RIOT_DDRAGON' | 'TENCENT_GTIMG' | 'COMMUNITY_DRAGON';
+  endpoint: string;
+  healthy: boolean;
+  httpStatus: number;
+  latencyMs: number;
+  version: string;
+  cachedCount: number;
+  lastSyncedAt: string;
+}
+
+export interface ExternalRuneBuildOptionDto {
+  id: string;
+  name: string;
+  primaryStyleId: number;
+  primaryStyleName: string;
+  subStyleId: number;
+  subStyleName: string;
+  selectedPerkIds: number[];
+  perkNames: string[];
+  playCount: number;
+  winCount: number;
+  winRate: number;
+  pickRate: number;
+  source: 'OPGG_LIVE' | 'ADAPTIVE_CATALOG';
+}
+
+export interface ExternalItemBuildGroupDto {
+  ids: number[];
+  names: string[];
+  icons: string[];
+  playCount: number;
+  winRate: number;
+  pickRate: number;
+}
+
+export interface ExternalChampionBuildDetailDto {
+  championId: number;
+  championName: string;
+  championTitle: string;
+  position: 'TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM';
+  availablePositions: ('TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM')[];
+  patchVersion: string;
+  source: 'OPGG_LIVE' | 'LOCAL_FALLBACK';
+  fetchedAt: string;
+  tier: number;
+  tierLabel: 'T0' | 'T1' | 'T2' | 'T3' | 'T4' | 'T5';
+  rank: number;
+  winRate: number;
+  pickRate: number;
+  banRate: number;
+  kda: number;
+  samplePlayCount: number;
+  runeBuilds: ExternalRuneBuildOptionDto[];
+  coreItems: ExternalItemBuildGroupDto[];
+  starterItems: ExternalItemBuildGroupDto[];
+  boots: ExternalItemBuildGroupDto[];
+  skillOrder: {
+    masteryPriority: string[];
+    levelOrder: string[];
+    winRate: number;
+    pickRate: number;
+    playCount: number;
+  };
+  summonerSpells: {
+    ids: number[];
+    names: string[];
+    winRate: number;
+    pickRate: number;
+    playCount: number;
+  }[];
+  strongAgainst: {
+    enemyChampionId: number;
+    enemyChampionName: string;
+    playCount: number;
+    winCount: number;
+    myWinRate: number;
+  }[];
+  weakAgainst: {
+    enemyChampionId: number;
+    enemyChampionName: string;
+    playCount: number;
+    winCount: number;
+    myWinRate: number;
+  }[];
+}
+
+export interface ExternalMetaOverviewDto {
+  ddragonVersion: string;
+  opggPatchVersion: string;
+  tencentVersion: string;
+  sources: ExternalSourceStatusDto[];
+  rankedTierList: {
+    championId: number;
+    championName: string;
+    championTitle: string;
+    primaryPosition: 'TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM';
+    positions: ('TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM')[];
+    tier: number;
+    tierLabel: 'T0' | 'T1' | 'T2' | 'T3' | 'T4' | 'T5';
+    rank: number;
+    winRate: number;
+    pickRate: number;
+    banRate: number;
+    kda: number;
+    playCount: number;
+  }[];
+  aramBalanceList: (import('../core/types').AramChampionBalance & {
+    opggTier?: number;
+    opggPlayCount?: number;
+    opggKda?: number;
+    opggRank?: number;
+    dataSource: 'OPGG_LIVE+RIOT_BALANCE' | 'LOCAL_MODEL';
+  })[];
+}
+
 export function isTauriNativeRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__?.invoke);
 }
 
+function resolveBridgeUrl(url: string): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    const proto = window.location.protocol;
+    if (host === 'tauri.localhost' || proto === 'tauri:' || proto === 'asset:') {
+      return `http://127.0.0.1:32100${url}`;
+    }
+  }
+  return url;
+}
+
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(resolveBridgeUrl(url), {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -112,7 +239,7 @@ async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 /**
  * Dual-mode dispatcher: invokes Tauri 2 native Rust command when `window.__TAURI_INTERNALS__.invoke`
- * is present, and seamlessly falls back to the Express isomorphic bridge in Web Preview.
+ * is present, and seamlessly falls back to the Express isomorphic bridge in Web Preview or Sidecar.
  */
 async function invokeOrFetch<T>(
   tauriCmd: string,
@@ -124,7 +251,7 @@ async function invokeOrFetch<T>(
     try {
       return await window.__TAURI_INTERNALS__.invoke<T>(tauriCmd, tauriArgs);
     } catch {
-      // Fallback to HTTP bridge if native command delegates to sidecar
+      // Fallback to local HTTP sidecar bridge if command delegates to Express sidecar
       return apiJson<T>(httpUrl, httpOptions);
     }
   }
@@ -429,5 +556,61 @@ export const tauriBridgeClient = {
       }
     );
   },
+
+  async getExternalOverview(): Promise<{
+    overview: ExternalMetaOverviewDto;
+    ringBuffer: IpcEnvelope[];
+  }> {
+    return invokeOrFetch('get_external_overview', {}, '/api/external/overview');
+  },
+
+  async syncExternalData(): Promise<{
+    overview: ExternalMetaOverviewDto;
+    ringBuffer: IpcEnvelope[];
+  }> {
+    return invokeOrFetch('sync_external_data', {}, '/api/external/sync', {
+      method: 'POST',
+    });
+  },
+
+  async getExternalChampionBuild(
+    championId: number,
+    position?: string
+  ): Promise<{
+    detail: ExternalChampionBuildDetailDto;
+    ringBuffer: IpcEnvelope[];
+  }> {
+    const query = position
+      ? `?championId=${championId}&position=${encodeURIComponent(position)}`
+      : `?championId=${championId}`;
+    return invokeOrFetch(
+      'get_external_champion_build',
+      { championId, position },
+      `/api/external/champion-build${query}`
+    );
+  },
+
+  async injectCustomRunePage(customRunePage: {
+    name: string;
+    primaryStyleId: number;
+    subStyleId: number;
+    selectedPerkIds: number[];
+    winRate?: number;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    ringBuffer: IpcEnvelope[];
+  }> {
+    return invokeOrFetch(
+      'inject_custom_lcu_rune_page',
+      { customRunePage },
+      '/api/bridge/inject-rune',
+      {
+        method: 'POST',
+        body: JSON.stringify({ customRunePage }),
+      }
+    );
+  },
 };
+
 

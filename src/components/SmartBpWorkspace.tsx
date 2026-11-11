@@ -3,8 +3,12 @@
  * Anti-Censorship Chat Broadcaster & Two-Stage 10-Player SGP Scout Workspace
  */
 
-import React, { useMemo, useState } from 'react';
-import { BpSimulationResult } from '../bridge/tauriClient';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  BpSimulationResult,
+  ExternalChampionBuildDetailDto,
+  tauriBridgeClient,
+} from '../bridge/tauriClient';
 import {
   ALL_CHAMPIONS_SORTED,
   buildAdaptiveRunePresetForChampion,
@@ -73,6 +77,49 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
   const [scoutFilter, setScoutFilter] = useState<ScoutFilterMode>('ALL');
   const [hoveredPremadeId, setHoveredPremadeId] = useState<string | null>(null);
 
+  const [externalChampId, setExternalChampId] = useState<number>(
+    automation.primaryPickChampionIds[0] ?? 266
+  );
+  const [externalPosition, setExternalPosition] = useState<
+    'TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM'
+  >('TOP');
+  const [externalBuild, setExternalBuild] =
+    useState<ExternalChampionBuildDetailDto | null>(null);
+  const [selectedOpggRuneIndex, setSelectedOpggRuneIndex] = useState<number>(0);
+  const [loadingExternalBuild, setLoadingExternalBuild] = useState<boolean>(false);
+
+  const roleToExternalPos = (
+    role?: string
+  ): 'TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' => {
+    if (role === 'TOP') return 'TOP';
+    if (role === 'JGL' || role === 'JUNGLE') return 'JUNGLE';
+    if (role === 'ADC') return 'ADC';
+    if (role === 'SUP' || role === 'SUPPORT') return 'SUPPORT';
+    return 'MID';
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingExternalBuild(true);
+    tauriBridgeClient
+      .getExternalChampionBuild(externalChampId, externalPosition)
+      .then((res) => {
+        if (!cancelled) {
+          setExternalBuild(res.detail);
+          setSelectedOpggRuneIndex(0);
+        }
+      })
+      .catch(() => {
+        // Keep existing state on transient error
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingExternalBuild(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [externalChampId, externalPosition]);
+
   const filteredCatalogChampions = useMemo(() => {
     const q = champSearchQuery.trim().toLowerCase();
     if (!q) return ALL_CHAMPIONS_SORTED;
@@ -136,6 +183,18 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
   };
 
   const handleInjectRune = async () => {
+    const activeOpggRune = externalBuild?.runeBuilds?.[selectedOpggRuneIndex];
+    if (activeOpggRune && activeOpggRune.selectedPerkIds.length >= 6) {
+      const res = await tauriBridgeClient.injectCustomRunePage({
+        name: activeOpggRune.name,
+        primaryStyleId: activeOpggRune.primaryStyleId,
+        subStyleId: activeOpggRune.subStyleId,
+        selectedPerkIds: activeOpggRune.selectedPerkIds,
+        winRate: activeOpggRune.winRate,
+      });
+      setRuneStatusMessage(res.message);
+      return;
+    }
     const msg = await onInjectRunePage(selectedRunePresetId);
     setRuneStatusMessage(msg);
   };
@@ -470,6 +529,9 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                           ],
                         });
                         setSelectedRunePresetId(`auto-champ-${chosenId}`);
+                        setExternalChampId(chosenId);
+                        const role = FULL_CHAMPION_CATALOG[chosenId]?.primaryRole;
+                        if (role) setExternalPosition(roleToExternalPos(role));
                       }}
                       className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
                     >
@@ -593,12 +655,12 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
           )}
         </section>
 
-        {/* Col 6-8: Auto-Rune Hot Injector (Supports All 169 Champions) */}
+        {/* Col 6-8: Live OP.GG + 169 Champion Auto-Rune & Core Build Hot Injector */}
         <section className="lg:col-span-3 p-5 rounded-xl bg-gray-900/90 border border-slate-800/80 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-2">
               <h3 className="font-display text-sm font-bold text-slate-100">
-                04. 169 全英雄自适应符文热写入
+                04. OP.GG 实时大数据符文与核心出装
               </h3>
               <button
                 type="button"
@@ -606,67 +668,151 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                   const activeChampId =
                     allies[0]?.currentChampionId ||
                     automation.primaryPickChampionIds[0] ||
-                    203;
+                    266;
+                  setExternalChampId(activeChampId);
                   setSelectedRunePresetId(`auto-champ-${activeChampId}`);
                 }}
                 className="text-[11px] text-sky-400 hover:text-sky-300 underline whitespace-nowrap"
               >
-                匹配当前选用
+                同步当前英雄
               </button>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              支持全部 169 名英雄 9 槽位完整符文页自动装配与热替换
+              直连 <code className="text-sky-400">lol-api-champion.op.gg</code> 翡翠+与大乱斗实时样本
             </p>
 
-            <div className="mt-3">
-              <label htmlFor="rune-preset-select" className="sr-only">
-                选择高胜率符文配置或全英雄自适应方案
-              </label>
+            {/* Champion + Position Selector */}
+            <div className="grid grid-cols-3 gap-1.5 mt-2.5">
               <select
-                id="rune-preset-select"
-                value={selectedRunePresetId}
-                onChange={(e) => setSelectedRunePresetId(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100"
+                aria-label="选择OP.GG实时查询英雄"
+                value={externalChampId}
+                onChange={(e) => {
+                  const cid = Number(e.target.value);
+                  setExternalChampId(cid);
+                  setSelectedRunePresetId(`auto-champ-${cid}`);
+                  const defRole = FULL_CHAMPION_CATALOG[cid]?.primaryRole;
+                  if (defRole && externalPosition !== 'ARAM') {
+                    setExternalPosition(roleToExternalPos(defRole));
+                  }
+                }}
+                className="col-span-2 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-100"
               >
-                <optgroup label="精选高胜率专精符文页">
-                  {RUNE_PAGE_PRESETS.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.championName} · {r.pageName} ({r.winRate}%)
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="169 全英雄自适应 9 槽位符文生成">
-                  {ALL_CHAMPIONS_SORTED.map((c) => (
-                    <option key={`auto-champ-${c.id}`} value={`auto-champ-${c.id}`}>
-                      {c.name} ({c.title}) · 自适应高胜率符文页
-                    </option>
-                  ))}
-                </optgroup>
+                {ALL_CHAMPIONS_SORTED.map((c) => (
+                  <option key={`opgg-c-${c.id}`} value={c.id}>
+                    {c.name}·{c.title} (#{c.id})
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="选择OP.GG分路或大乱斗"
+                value={externalPosition}
+                onChange={(e) =>
+                  setExternalPosition(
+                    e.target.value as 'TOP' | 'JUNGLE' | 'MID' | 'ADC' | 'SUPPORT' | 'ARAM'
+                  )
+                }
+                className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-100 font-mono"
+              >
+                <option value="TOP">TOP 上单</option>
+                <option value="JUNGLE">JUG 打野</option>
+                <option value="MID">MID 中单</option>
+                <option value="ADC">ADC 下路</option>
+                <option value="SUPPORT">SUP 辅助</option>
+                <option value="ARAM">ARAM 乱斗</option>
               </select>
             </div>
 
-            <div className="mt-3 p-2.5 rounded-lg bg-slate-950/90 border border-slate-800/80 text-xs space-y-1">
-              <div className="flex items-center justify-between font-mono tabular-nums text-slate-300">
-                <span>{selectedRunePreset.primaryStyleName}</span>
-                <span>+</span>
-                <span>{selectedRunePreset.subStyleName}</span>
+            {externalBuild && (
+              <div className="mt-2.5 space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-mono tabular-nums px-2 py-1 rounded bg-slate-950 border border-slate-800/90">
+                  <span className="text-sky-400 font-semibold">
+                    {externalBuild.source === 'OPGG_LIVE'
+                      ? `OP.GG KR v${externalBuild.patchVersion}`
+                      : '本地自适应库'}
+                    {' · '}
+                    {externalBuild.tierLabel} (#{externalBuild.rank})
+                  </span>
+                  <span className="text-emerald-400">
+                    胜率 {(externalBuild.winRate * 100).toFixed(2)}% ·{' '}
+                    {externalBuild.samplePlayCount.toLocaleString()}场
+                  </span>
+                </div>
+
+                {/* OP.GG Rune Page Build Selector */}
+                {externalBuild.runeBuilds.length > 0 && (
+                  <select
+                    aria-label="切换OP.GG高胜率符文页分支"
+                    value={selectedOpggRuneIndex}
+                    onChange={(e) => setSelectedOpggRuneIndex(Number(e.target.value))}
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-100 font-mono"
+                  >
+                    {externalBuild.runeBuilds.map((rb, idx) => (
+                      <option key={rb.id} value={idx}>
+                        方案#{idx + 1}: {rb.perkNames[0]} ({(rb.winRate * 100).toFixed(1)}%胜率 ·{' '}
+                        {rb.playCount.toLocaleString()}场)
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {(() => {
+                  const activeRune =
+                    externalBuild.runeBuilds[selectedOpggRuneIndex] ||
+                    externalBuild.runeBuilds[0];
+                  if (!activeRune) return null;
+                  return (
+                    <div className="p-2 rounded-lg bg-slate-950/90 border border-slate-800/80 text-[11px] space-y-1">
+                      <div className="flex items-center justify-between font-mono tabular-nums text-slate-300">
+                        <span>{activeRune.primaryStyleName}</span>
+                        <span>+</span>
+                        <span>{activeRune.subStyleName}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-snug">
+                        {activeRune.perkNames.join(' · ')}
+                      </p>
+                      <div className="text-[10px] font-mono tabular-nums text-sky-400/90">
+                        9-Perks: [{activeRune.selectedPerkIds.join(', ')}]
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Core Items & Skill Order from OP.GG + Tencent GTImg */}
+                {externalBuild.coreItems.length > 0 && (
+                  <div className="p-2 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] font-mono tabular-nums space-y-1">
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>核心三件套 ({externalBuild.coreItems[0].names.join(' → ')})</span>
+                      <span className="text-emerald-400">
+                        {(externalBuild.coreItems[0].winRate * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="text-slate-400 flex items-center justify-between">
+                      <span>
+                        加点：{externalBuild.skillOrder.masteryPriority.join(' > ')} (前6级:{' '}
+                        {externalBuild.skillOrder.levelOrder.slice(0, 6).join('')})
+                      </span>
+                      {externalBuild.strongAgainst[0] && (
+                        <span className="text-amber-400">
+                          克制 {externalBuild.strongAgainst[0].enemyChampionName.split('·')[1] || externalBuild.strongAgainst[0].enemyChampionName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
-                {selectedRunePreset.perkNames.join(' · ')}
-              </p>
-              <div className="text-[10px] font-mono tabular-nums text-sky-400/90 pt-0.5">
-                Perk IDs: [{selectedRunePreset.selectedPerkIds.join(', ')}]
-              </div>
-            </div>
+            )}
           </div>
 
           <div className="mt-3 pt-2.5 border-t border-slate-800/80">
             <button
               type="button"
               onClick={handleInjectRune}
-              className="w-full py-2 px-4 rounded-lg bg-sky-500 text-slate-950 text-xs font-semibold hover:bg-sky-400 transition-colors whitespace-nowrap"
+              disabled={loadingExternalBuild}
+              className="w-full py-2 px-4 rounded-lg bg-sky-500 text-slate-950 text-xs font-semibold hover:bg-sky-400 transition-colors whitespace-nowrap disabled:opacity-60"
             >
-              热写入【{selectedRunePreset.championName}】符文页
+              {loadingExternalBuild
+                ? '正在同步 OP.GG 实时数据...'
+                : `热写入 OP.GG【${externalBuild?.championTitle || selectedRunePreset.championName}·${externalPosition}】9槽符文`}
             </button>
             {runeStatusMessage && (
               <p className="text-[11px] text-emerald-400 mt-1.5 font-mono">

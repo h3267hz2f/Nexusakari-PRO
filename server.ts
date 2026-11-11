@@ -29,6 +29,12 @@ import {
   FULL_CHAMPION_CATALOG,
 } from './src/core/championCatalog';
 import {
+  buildExternalMetaOverview,
+  ExternalPositionKey,
+  fetchExternalChampionBuild,
+  syncExternalLoLDataSources,
+} from './src/core/externalDataEngine';
+import {
   callLiveLcuEndpoint,
   executeLiveAutomationTick,
   executeRealChatBroadcast,
@@ -431,6 +437,16 @@ function buildDeterministicFallbackJudgeReport(
 
 async function startServer() {
   const app = express();
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '2mb' }));
 
   // 1. Bootstrap full state
@@ -662,31 +678,68 @@ async function startServer() {
     });
   });
 
-  // 7. Auto-Rune Hot Injection (Supports Curated Presets + Adaptive 9-Perk Generator for All 169 Champions)
+  // 7. Auto-Rune Hot Injection (Supports Live OP.GG 9-Perk Builds + Curated Presets + 169-Champion Adaptive Generator)
   app.post('/api/bridge/inject-rune', async (req, res) => {
-    const { presetId } = req.body as { presetId: string };
-    const preset =
-      presetId && presetId.startsWith('auto-champ-')
-        ? buildAdaptiveRunePresetForChampion(
-            Number.parseInt(presetId.replace('auto-champ-', ''), 10) || 203
-          )
-        : RUNE_PAGE_PRESETS.find((r) => r.id === presetId) ?? RUNE_PAGE_PRESETS[0];
+    const { presetId, customRunePage } = req.body as {
+      presetId?: string;
+      customRunePage?: {
+        name: string;
+        primaryStyleId: number;
+        subStyleId: number;
+        selectedPerkIds: number[];
+        winRate?: number;
+      };
+    };
+
+    const resolvedPage = customRunePage
+      ? {
+          pageName: customRunePage.name,
+          primaryStyleId: customRunePage.primaryStyleId,
+          subStyleId: customRunePage.subStyleId,
+          selectedPerkIds: customRunePage.selectedPerkIds,
+          winRate: customRunePage.winRate
+            ? Number((customRunePage.winRate * 100).toFixed(1))
+            : 52.5,
+        }
+      : presetId && presetId.startsWith('auto-champ-')
+        ? (() => {
+            const p = buildAdaptiveRunePresetForChampion(
+              Number.parseInt(presetId.replace('auto-champ-', ''), 10) || 203
+            );
+            return {
+              pageName: p.pageName,
+              primaryStyleId: p.primaryStyleId,
+              subStyleId: p.subStyleId,
+              selectedPerkIds: p.selectedPerkIds,
+              winRate: p.winRate,
+            };
+          })()
+        : (() => {
+            const p = RUNE_PAGE_PRESETS.find((r) => r.id === presetId) ?? RUNE_PAGE_PRESETS[0];
+            return {
+              pageName: p.pageName,
+              primaryStyleId: p.primaryStyleId,
+              subStyleId: p.subStyleId,
+              selectedPerkIds: p.selectedPerkIds,
+              winRate: p.winRate,
+            };
+          })();
 
     if (liveClientConnected) {
       const ok = await executeRealRuneInjection(
         triChannelStatus.credentials,
         {
-          pageName: preset.pageName,
-          primaryStyleId: preset.primaryStyleId,
-          subStyleId: preset.subStyleId,
-          selectedPerkIds: preset.selectedPerkIds,
+          pageName: resolvedPage.pageName,
+          primaryStyleId: resolvedPage.primaryStyleId,
+          subStyleId: resolvedPage.subStyleId,
+          selectedPerkIds: resolvedPage.selectedPerkIds,
         },
         recordAdapterEnvelope
       );
       res.json({
         success: ok,
         message: ok
-          ? `已向真机客户端热写入符文页【${preset.pageName}】（胜率 ${preset.winRate}%）`
+          ? `已向真机客户端热写入符文页【${resolvedPage.pageName}】（胜率 ${resolvedPage.winRate}%）`
           : `真机符文写入返回非 200 状态，请检查客户端符文页槽位`,
         ringBuffer: ipcRingBuffer,
       });
@@ -699,12 +752,12 @@ async function startServer() {
       '/lol-perks/v1/pages',
       200,
       16.8,
-      `Hot-injected Rune Page "${preset.pageName}" (Primary: ${preset.primaryStyleId}, Perks: [${preset.selectedPerkIds.join(',')}])`
+      `Hot-injected Rune Page "${resolvedPage.pageName}" (Primary: ${resolvedPage.primaryStyleId}, Perks: [${resolvedPage.selectedPerkIds.join(',')}])`
     );
 
     res.json({
       success: true,
-      message: `已通过 LCU /lol-perks/v1/pages 热写入符文页【${preset.pageName}】（胜率 ${preset.winRate}%）`,
+      message: `已通过 LCU /lol-perks/v1/pages 热写入符文页【${resolvedPage.pageName}】（胜率 ${resolvedPage.winRate}%）`,
       ringBuffer: ipcRingBuffer,
     });
   });
@@ -1280,6 +1333,44 @@ async function startServer() {
     }
   });
 
+  // 16. External Multi-Source Live LoL Data Engine (OP.GG + Riot DataDragon + Tencent GTImg + CommunityDragon)
+  app.get('/api/external/overview', async (_req, res) => {
+    const synced = await syncExternalLoLDataSources(false);
+    for (const env of synced.envelopes) {
+      recordAdapterEnvelope(env);
+    }
+    res.json({
+      overview: synced.overview,
+      ringBuffer: ipcRingBuffer,
+    });
+  });
+
+  app.post('/api/external/sync', async (_req, res) => {
+    const synced = await syncExternalLoLDataSources(true);
+    for (const env of synced.envelopes) {
+      recordAdapterEnvelope(env);
+    }
+    res.json({
+      overview: synced.overview,
+      ringBuffer: ipcRingBuffer,
+    });
+  });
+
+  app.get('/api/external/champion-build', async (req, res) => {
+    const championId = Number(req.query.championId || 266);
+    const position = req.query.position
+      ? (String(req.query.position).toUpperCase() as ExternalPositionKey)
+      : undefined;
+    const fetched = await fetchExternalChampionBuild(championId, position);
+    for (const env of fetched.envelopes) {
+      recordAdapterEnvelope(env);
+    }
+    res.json({
+      detail: fetched.detail,
+      ringBuffer: ipcRingBuffer,
+    });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -1302,6 +1393,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`NexusAkari Pro v4 Isomorphic Bridge & AI Server running at http://localhost:${PORT}`);
     void probeAndSyncLiveClient(true);
+    void syncExternalLoLDataSources(false);
   });
 }
 
