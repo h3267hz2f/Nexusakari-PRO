@@ -77,6 +77,38 @@ const RING_BUFFER_CAPACITY = 256;
 let ipcRingBuffer: IpcEnvelope[] = [...INITIAL_IPC_RING_BUFFER];
 let ipcCounter = 100;
 
+const USER_STATE_FILE = path.join(process.cwd(), 'nexus-akari-user-state.json');
+
+function loadPersistedUserState() {
+  try {
+    if (fs.existsSync(USER_STATE_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(USER_STATE_FILE, 'utf-8'));
+      if (raw?.automationConfig && typeof raw.automationConfig === 'object') {
+        automationConfig = { ...automationConfig, ...raw.automationConfig };
+      }
+      if (Array.isArray(raw?.blacklistLedger)) {
+        blacklistLedger = raw.blacklistLedger;
+      }
+    }
+  } catch {
+    // Keep default state if file is unreadable
+  }
+}
+
+function savePersistedUserState() {
+  try {
+    fs.writeFileSync(
+      USER_STATE_FILE,
+      JSON.stringify({ automationConfig, blacklistLedger }, null, 2),
+      'utf-8'
+    );
+  } catch {
+    // Ignore write error in read-only environments
+  }
+}
+
+loadPersistedUserState();
+
 // Live LCU state when connected to a real LeagueClientUx.exe on 127.0.0.1
 let liveClientConnected = false;
 let liveScoutProfiles: SummonerScoutProfile[] | null = null;
@@ -84,6 +116,7 @@ let liveLootShards: LootItemShard[] | null = null;
 let liveMatchTimeline: TimelineMinutePoint[] | null = null;
 let liveAutomationDaemonStarted = false;
 let liveAutomationTickInFlight = false;
+let liveDaemonTickCount = 0;
 
 function pushIpcEnvelope(
   channel: IpcEnvelope['channel'],
@@ -125,7 +158,7 @@ function recordAdapterEnvelope(env: Omit<IpcEnvelope, 'id' | 'timestamp'>) {
 /**
  * Starts the 1500ms background automation daemon that automatically executes
  * ReadyCheck Auto-Accept, ChampSelect Safe-Ban & Auto-Pick, ARAM <5ms Bench Sniper,
- * and Auto-Reconnect whenever a real LeagueClientUx.exe is connected.
+ * Auto-Reconnect, and periodic GameflowPhase + 10-Player Scout synchronization.
  */
 function ensureLiveAutomationDaemon() {
   if (liveAutomationDaemonStarted) return;
@@ -133,12 +166,29 @@ function ensureLiveAutomationDaemon() {
   setInterval(async () => {
     if (!liveClientConnected || liveAutomationTickInFlight) return;
     liveAutomationTickInFlight = true;
+    liveDaemonTickCount++;
     try {
       await executeLiveAutomationTick(
         triChannelStatus.credentials,
         automationConfig,
         recordAdapterEnvelope
       );
+      if (liveDaemonTickCount % 3 === 0) {
+        const sessionData = await fetchLiveSessionAndScoutProfiles(
+          triChannelStatus.credentials,
+          recordAdapterEnvelope,
+          blacklistLedger
+        );
+        triChannelStatus.gameflowPhase = sessionData.phase;
+        triChannelStatus.liveClient2999Active =
+          sessionData.phase === GameflowPhase.IN_PROGRESS;
+        if (sessionData.profiles && sessionData.profiles.length > 0) {
+          liveScoutProfiles = sessionData.profiles;
+        }
+        if (sessionData.timeline && sessionData.timeline.length >= 5) {
+          liveMatchTimeline = sessionData.timeline;
+        }
+      }
     } catch {
       // Ignore transient LCU poll errors during client phase transitions
     } finally {
@@ -506,6 +556,7 @@ async function startServer() {
     const { config } = req.body;
     if (config) {
       automationConfig = { ...automationConfig, ...config };
+      savePersistedUserState();
       pushIpcEnvelope(
         'TAURI_CMD',
         'CONFIG',
@@ -711,7 +762,7 @@ async function startServer() {
           '/lol-champ-select/v1/session/my-selection/reroll',
           undefined,
           recordAdapterEnvelope
-        );
+        ).catch(() => null);
       } else if (targetChampionId) {
         const swapRes = await callLiveLcuEndpoint(
           triChannelStatus.credentials,
@@ -719,10 +770,25 @@ async function startServer() {
           `/lol-champ-select/v1/session/bench/swap/${targetChampionId}`,
           undefined,
           recordAdapterEnvelope
-        );
-        if (swapRes.ok) {
+        ).catch(() => null);
+        if (swapRes?.ok) {
           swapped = true;
           newChampId = targetChampionId;
+        }
+      }
+      const csSession = await callLiveLcuEndpoint<any>(
+        triChannelStatus.credentials,
+        'GET',
+        '/lol-champ-select/v1/session',
+        undefined,
+        recordAdapterEnvelope
+      ).catch(() => null);
+      if (csSession?.ok && Array.isArray(csSession.data?.benchChampions)) {
+        const liveBench = csSession.data.benchChampions
+          .map((b: any) => Number(b?.championId ?? 0))
+          .filter((id: number) => id > 0);
+        if (liveBench.length > 0) {
+          updatedBench = liveBench;
         }
       }
     }
@@ -945,6 +1011,7 @@ async function startServer() {
       newEntry,
       ...blacklistLedger.filter((b) => b.puuid !== newEntry.puuid),
     ];
+    savePersistedUserState();
 
     pushIpcEnvelope(
       'TAURI_CMD',
@@ -965,6 +1032,7 @@ async function startServer() {
   app.delete('/api/bridge/blacklist/:puuid', (req, res) => {
     const { puuid } = req.params;
     blacklistLedger = blacklistLedger.filter((b) => b.puuid !== puuid);
+    savePersistedUserState();
 
     pushIpcEnvelope(
       'TAURI_CMD',

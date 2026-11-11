@@ -357,6 +357,31 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
 
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-slate-300">开启自动秒锁英雄</span>
+                  <input
+                    type="checkbox"
+                    checked={automation.autoPickEnabled}
+                    onChange={(e) =>
+                      onUpdateAutomation({ autoPickEnabled: e.target.checked })
+                    }
+                    className="accent-sky-500 w-4 h-4"
+                  />
+                </label>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-slate-300">开启自动禁用英雄</span>
+                  <input
+                    type="checkbox"
+                    checked={automation.autoBanEnabled}
+                    onChange={(e) =>
+                      onUpdateAutomation({ autoBanEnabled: e.target.checked })
+                    }
+                    className="accent-sky-500 w-4 h-4"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <label className="flex items-center justify-between cursor-pointer">
                   <span className="text-slate-400">掉线 5s 自动重连</span>
                   <input
                     type="checkbox"
@@ -380,12 +405,88 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                 </label>
               </div>
 
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    主选秒锁英雄
+                  </label>
+                  <select
+                    aria-label="主选秒锁英雄"
+                    value={automation.primaryPickChampionIds[0] ?? 203}
+                    onChange={(e) =>
+                      onUpdateAutomation({
+                        primaryPickChampionIds: [
+                          Number(e.target.value),
+                          ...automation.primaryPickChampionIds.slice(1),
+                        ],
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                  >
+                    <option value={203}>千珏 (203)</option>
+                    <option value={516}>奥恩 (516)</option>
+                    <option value={145}>卡莎 (145)</option>
+                    <option value={266}>亚托克斯 (266)</option>
+                    <option value={64}>李青 (64)</option>
+                    <option value={103}>阿狸 (103)</option>
+                    <option value={202}>烬 (202)</option>
+                    <option value={126}>杰斯 (126)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    备选秒锁英雄
+                  </label>
+                  <select
+                    aria-label="备选秒锁英雄"
+                    value={automation.backupPickChampionIds[0] ?? 412}
+                    onChange={(e) =>
+                      onUpdateAutomation({
+                        backupPickChampionIds: [Number(e.target.value)],
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                  >
+                    <option value={412}>锤石 (412)</option>
+                    <option value={516}>奥恩 (516)</option>
+                    <option value={81}>伊泽瑞尔 (81)</option>
+                    <option value={61}>奥莉安娜 (61)</option>
+                    <option value={122}>德莱厄斯 (122)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    首选禁用英雄
+                  </label>
+                  <select
+                    aria-label="首选禁用英雄"
+                    value={automation.banChampionIds[0] ?? 53}
+                    onChange={(e) =>
+                      onUpdateAutomation({
+                        banChampionIds: [
+                          Number(e.target.value),
+                          897,
+                          238,
+                        ],
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                  >
+                    <option value={53}>布里茨 (53)</option>
+                    <option value={897}>奎桑提 (897)</option>
+                    <option value={238}>劫 (238)</option>
+                    <option value={157}>亚索 (157)</option>
+                    <option value={114}>菲奥娜 (114)</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="pt-2 border-t border-slate-800/80">
                 <label
                   htmlFor="teammate-hover-select"
                   className="block text-slate-400 mb-1"
                 >
-                  模拟 5 楼队友当前预选亮出英雄 (测试防误Ban跳过逻辑)：
+                  模拟 5 楼队友当前预选亮出英雄 (或立即执行一次真机 BP 检查)：
                 </label>
                 <div className="flex items-center gap-2">
                   <select
@@ -422,7 +523,8 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
             </div>
           ) : (
             <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-400 font-mono tabular-nums">
-              预设禁用队列：#1 布里茨(53) · #2 奎桑提(897) · #3 劫(238)
+              当前禁用队列：#{automation.banChampionIds.join(' -> #')} · 主选：#
+              {automation.primaryPickChampionIds[0] ?? 203}
             </div>
           )}
         </section>

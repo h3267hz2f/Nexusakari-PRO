@@ -112,19 +112,6 @@ async fn main() {
         return;
     }
 
-    // Spawn native Rust ChampSelect & Lifecycle Automation loop (1500ms tick)
-    let state_for_loop = Arc::clone(&state);
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(1500));
-        loop {
-            ticker.tick().await;
-            let has_creds = state_for_loop.credentials.read().await.is_some();
-            if has_creds {
-                let _ = state_for_loop.execute_champ_select_tick().await;
-            }
-        }
-    });
-
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -140,7 +127,7 @@ async fn main() {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    for _ in 0..30 {
+    for _ in 0..35 {
         if let Ok(resp) = http_client.get(&health_url).send().await {
             if resp.status().is_success() {
                 break;
@@ -151,10 +138,26 @@ async fn main() {
 
     let _window_proc = launch_desktop_window(&local_url);
 
-    // Keep native kernel & sidecar running until Ctrl+C or process termination
-    let _ = tokio::signal::ctrl_c().await;
-
+    // On Windows GUI subsystem (`windows_subsystem = "windows"`), `tokio::signal::ctrl_c()`
+    // can fail immediately because no console is attached. Instead, monitor the sidecar process
+    // (or run native champ-select automation if running standalone without a sidecar).
     if let Some(ref mut child) = sidecar {
-        let _ = child.kill();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => break,
+                Ok(None) => tokio::time::sleep(Duration::from_millis(1000)).await,
+                Err(_) => break,
+            }
+        }
+    } else {
+        let state_for_loop = Arc::clone(&state);
+        let mut ticker = tokio::time::interval(Duration::from_millis(1500));
+        loop {
+            ticker.tick().await;
+            let has_creds = state_for_loop.credentials.read().await.is_some();
+            if has_creds {
+                let _ = state_for_loop.execute_champ_select_tick().await;
+            }
+        }
     }
 }

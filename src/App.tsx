@@ -115,6 +115,30 @@ export function App() {
     };
   }, []);
 
+  // Automatically poll live LCU state every 3.5s when connected to a real LeagueClientUx.exe
+  useEffect(() => {
+    if (status.mode !== 'tauri-native') return;
+    const timer = window.setInterval(() => {
+      tauriBridgeClient
+        .getBootstrapState()
+        .then((res) => {
+          setStatus(res.status);
+          setRingBuffer(res.ringBuffer);
+          setScoutProfiles(res.scoutProfiles);
+          if (res.lootShards && res.lootShards.length > 0) {
+            setLootShards(res.lootShards);
+          }
+          if (res.matchTimeline && res.matchTimeline.length > 0) {
+            setMatchTimeline(res.matchTimeline);
+          }
+        })
+        .catch(() => {
+          // Ignore transient polling errors
+        });
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [status.mode]);
+
   const handleProbeLiveClient = async (): Promise<{
     connected: boolean;
     message: string;

@@ -10,4 +10,6 @@ coverage/
 *.log
 .env*
 !.env.example
+nexus-akari-user-state.json
+
 

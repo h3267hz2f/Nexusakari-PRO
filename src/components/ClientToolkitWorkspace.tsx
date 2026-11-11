@@ -98,6 +98,23 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
     return initial;
   });
 
+  // Sync live :2999 Ionian Boots (3158) & Cosmic Insight (8347) updates when scoutProfiles refreshes
+  useEffect(() => {
+    setSpellStateMap((prev) => {
+      const next = { ...prev };
+      for (const enemy of enemyPlayers) {
+        const existing = next[enemy.puuid];
+        next[enemy.puuid] = {
+          hasCosmicInsight: enemy.hasCosmicInsight,
+          hasIonianBoots: enemy.hasIonianBoots,
+          flashRemainingSec: existing?.flashRemainingSec ?? 0,
+          secondaryRemainingSec: existing?.secondaryRemainingSec ?? 0,
+        };
+      }
+      return next;
+    });
+  }, [enemyPlayers]);
+
   const [petStacks, setPetStacks] = useState<number>(40);
   const [copiedTimerAlert, setCopiedTimerAlert] = useState<string | null>(null);
 
