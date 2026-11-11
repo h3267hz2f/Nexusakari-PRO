@@ -107,13 +107,14 @@
 - **核心职责（零简化）**：
   - 在 Rust 内核 `AppKernelState` 中打通 `GET /lol-champ-select/v1/session` -> `arbitrate_safe_ban` / `diff_aram_bench_pool` -> `PATCH /lol-champ-select/v1/session/actions/{id}` 与 `POST /lol-champ-select/v1/session/bench/swap/{id}` 的原生异步执行链路，并补充 `Slice-1.6` 符文收益与时间轴转换单元测试。
 
-### [x] `Slice-13`: Windows x64 桌面安装包 (`Setup.exe` + `Portable.zip`) 构建流水线与无黑框原生启动器 (已完成)
+### [x] `Slice-13`: Windows x64 桌面安装包 (`Setup.exe` + `Portable.zip`) 构建流水线与纯 Rust 自解压安装器 (已完成)
 - **包含文件**：
   - `/src-tauri/src/main.rs` (146 行 · Windows GUI 无黑框桌面启动器、PID 看门狗、1500ms 原生 BP 守护协程与 Sidecar 生命周期管理)
-  - `/src-tauri/installer.nsi` (45 行 · NSIS 中文安装向导、桌面快捷方式与卸载器脚本)
-  - `/.github/workflows/rust-tauri-ci.yml` (新增 `windows-desktop-installer` 矩阵打包与 `actions/upload-artifact@v4` 产物上传)
+  - `/src-tauri/src/bin/setup_stub.rs` (205 行 · 纯 Rust `NAKP4SFX` 自解压安装程序，零外部 NSIS/WiX 依赖，自动解压至 `%LOCALAPPDATA%\Programs\NexusAkariPro`、生成桌面快捷方式并拉起主程序)
+  - `/.github/workflows/rust-tauri-ci.yml` (`windows-desktop-installer` 矩阵打包与 `actions/upload-artifact@v4` 产物上传)
   - `/package.json` & `/server.ts` (新增 `npm run build:server` 单文件免依赖打包支持)
 - **核心职责（零简化）**：
-  - 在 GitHub Actions `windows-latest` 上编译 `nexus-akari-pro.exe`、内嵌便携式运行时与单文件全栈桥接包 (`runtime/server.cjs`)，通过 `makensis` 自动产出 **`NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe`** 安装程序与 **`NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip`** 免安装绿色包。
+  - 在 GitHub Actions `windows-latest` 上编译 `nexus-akari-pro.exe` 与 `setup_stub.exe`，内嵌便携式运行时与单文件全栈桥接包 (`runtime/server.cjs`)，通过 `NAKP4SFX` 二进制流式封装直接产出 **`NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe`** 安装程序与 **`NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip`** 免安装绿色包。
+
 
 

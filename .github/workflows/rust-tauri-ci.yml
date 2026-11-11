@@ -86,18 +86,20 @@ jobs:
           npm run build
           npm run build:server
 
-      - name: Compile Native Windows x64 Release Binary (nexus-akari-pro.exe)
+      - name: Compile Native Windows x64 Release Binaries (nexus-akari-pro.exe & setup_stub.exe)
         working-directory: ./src-tauri
-        run: cargo build --release
+        run: cargo build --release --bins
 
-      - name: Smoke-Test Native Windows Executable
+      - name: Smoke-Test Native Windows Executables
         shell: pwsh
         run: |
           ./src-tauri/target/release/nexus-akari-pro.exe --smoke-test
+          ./src-tauri/target/release/setup_stub.exe --smoke-test
 
-      - name: Stage Self-Contained Windows Distribution & Build NSIS Setup.exe + Portable.zip
+      - name: Stage Self-Contained Windows Distribution & Assemble Setup.exe + Portable.zip
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "release-stage/dist" | Out-Null
           New-Item -ItemType Directory -Force -Path "release-stage/runtime" | Out-Null
           New-Item -ItemType Directory -Force -Path "release-bundles" | Out-Null
@@ -111,10 +113,24 @@ jobs:
 
           Set-Content -Path "release-stage/Start-NexusAkari-Pro.cmd" -Value "@echo off`r`nstart `"`" `"%~dp0nexus-akari-pro.exe`"" -Encoding ASCII
 
-          Compress-Archive -Path "release-stage/*" -DestinationPath "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip" -Force
+          $zipPath = "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip"
+          $setupPath = "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe"
 
-          makensis src-tauri/installer.nsi
-          Get-ChildItem release-bundles
+          Compress-Archive -Path "release-stage/*" -DestinationPath $zipPath -Force
+
+          $stubBytes = [System.IO.File]::ReadAllBytes("src-tauri/target/release/setup_stub.exe")
+          $zipBytes  = [System.IO.File]::ReadAllBytes($zipPath)
+          $lenBytes  = [System.BitConverter]::GetBytes([uint64]$zipBytes.Length)
+          $magicBytes = [System.Text.Encoding]::ASCII.GetBytes("NAKP4SFX")
+
+          $outStream = [System.IO.File]::Create($setupPath)
+          $outStream.Write($stubBytes, 0, $stubBytes.Length)
+          $outStream.Write($zipBytes, 0, $zipBytes.Length)
+          $outStream.Write($lenBytes, 0, $lenBytes.Length)
+          $outStream.Write($magicBytes, 0, $magicBytes.Length)
+          $outStream.Close()
+
+          Get-ChildItem release-bundles | Format-Table Name, Length -AutoSize
 
       - name: Upload Windows x64 Setup.exe & Portable.zip Artifacts
         uses: actions/upload-artifact@v4
