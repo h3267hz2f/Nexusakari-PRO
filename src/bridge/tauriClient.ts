@@ -67,6 +67,33 @@ export interface ClientCosmeticPayload {
   statusMessage: string;
 }
 
+export interface LiveAramSessionDto {
+  benchEnabled: boolean;
+  currentChampionId: number;
+  benchChampionIds: number[];
+}
+
+export interface SpectatorQueryResult {
+  found: boolean;
+  source: 'SGP_GSM' | 'LCU_GAMEFLOW' | 'REPLAY_SYNTHESIS';
+  regionCode: string;
+  spectatorDomain: string;
+  spectatorPort: number;
+  gameId: string;
+  encryptionKey: string;
+  targetName: string;
+  message: string;
+  ringBuffer: IpcEnvelope[];
+}
+
+export interface SpectatorLaunchResult {
+  launched: boolean;
+  executablePath: string;
+  cliCommand: string;
+  message: string;
+  ringBuffer: IpcEnvelope[];
+}
+
 export function isTauriNativeRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__?.invoke);
 }
@@ -113,6 +140,7 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     lootShards?: LootItemShard[];
     matchTimeline?: TimelineMinutePoint[];
+    aramSession?: LiveAramSessionDto | null;
     liveClientConnected?: boolean;
   }> {
     return invokeOrFetch('get_bootstrap_state', {}, '/api/bridge/bootstrap');
@@ -125,6 +153,7 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     lootShards: LootItemShard[];
     matchTimeline?: TimelineMinutePoint[];
+    aramSession?: LiveAramSessionDto | null;
     ringBuffer: IpcEnvelope[];
   }> {
     return invokeOrFetch(
@@ -367,4 +396,38 @@ export const tauriBridgeClient = {
       }
     );
   },
+
+  async querySpectatorSession(params: {
+    targetSummoner: string;
+    regionCode: string;
+  }): Promise<SpectatorQueryResult> {
+    return invokeOrFetch(
+      'query_sgp_spectator_session',
+      { ...params },
+      '/api/bridge/spectator-query',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }
+    );
+  },
+
+  async launchLocalSpectator(params: {
+    spectatorDomain: string;
+    spectatorPort: number;
+    encryptionKey: string;
+    gameId: string;
+    regionCode: string;
+  }): Promise<SpectatorLaunchResult> {
+    return invokeOrFetch(
+      'launch_local_spectator_process',
+      { ...params },
+      '/api/bridge/launch-spectator',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }
+    );
+  },
 };
+

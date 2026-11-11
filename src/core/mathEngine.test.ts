@@ -333,4 +333,65 @@ test('Slice-1.6: Live LCU Command-Line Parser & Riot Raw JSON-to-Domain Mappers'
   assert.equal(timelinePoints[1].blueTowers, 1);
 });
 
+test('Slice-1.7: Complete 169-Champion Catalog, 65-Rune Perk Dictionary, Adaptive 9-Perk Rune Builder & SGP Spectator Session', async () => {
+  const {
+    ALL_CHAMPIONS_SORTED,
+    FULL_CHAMPION_CATALOG,
+    buildAdaptiveRunePresetForChampion,
+    buildAramBalanceForChampion,
+  } = await import('./championCatalog');
+  const {
+    CHAMPION_METADATA_MAP,
+    PERK_METADATA_MAP,
+    getChampionMeta,
+    fetchLiveSpectatorSession,
+  } = await import('./liveLcuAdapter');
+
+  // 1. All 169 League of Legends champions are registered with zero '英雄 #ID' fallback
+  assert.ok(
+    ALL_CHAMPIONS_SORTED.length >= 169,
+    `Expected >= 169 champions in catalog, got ${ALL_CHAMPIONS_SORTED.length}`
+  );
+  assert.equal(Object.keys(CHAMPION_METADATA_MAP).length, ALL_CHAMPIONS_SORTED.length);
+
+  for (const champ of ALL_CHAMPIONS_SORTED) {
+    const meta = getChampionMeta(champ.id);
+    assert.ok(
+      !meta.name.startsWith('英雄 #'),
+      `Champion ID ${champ.id} should not fall back to generic name`
+    );
+    const adaptiveRune = buildAdaptiveRunePresetForChampion(champ.id);
+    assert.equal(adaptiveRune.selectedPerkIds.length, 9);
+    assert.ok(adaptiveRune.primaryStyleId >= 8000);
+    assert.ok(adaptiveRune.subStyleId >= 8000);
+    assert.ok(adaptiveRune.winRate >= 50 && adaptiveRune.winRate <= 65);
+
+    const aramBalance = buildAramBalanceForChampion(champ.id);
+    assert.equal(aramBalance.championId, champ.id);
+    assert.ok(aramBalance.recommendedMythicCore.length >= 3);
+  }
+
+  // Verify newest champions (Ambessa 799, Mel 800, Aurora 893, Smolder 901, Hwei 910, Naafiri 950)
+  assert.equal(FULL_CHAMPION_CATALOG[799].name, '安蓓萨');
+  assert.equal(FULL_CHAMPION_CATALOG[800].name, '梅尔');
+  assert.equal(FULL_CHAMPION_CATALOG[893].name, '阿萝拉');
+  assert.equal(FULL_CHAMPION_CATALOG[901].name, '斯莫德');
+  assert.equal(FULL_CHAMPION_CATALOG[910].name, '彗');
+  assert.equal(FULL_CHAMPION_CATALOG[950].name, '纳亚菲利');
+
+  // 2. Verify expanded Rune Perk dictionary covers all 5 rune trees (>= 60 perks)
+  assert.ok(
+    Object.keys(PERK_METADATA_MAP).length >= 60,
+    `Expected >= 60 rune perks in PERK_METADATA_MAP, got ${Object.keys(PERK_METADATA_MAP).length}`
+  );
+
+  // 3. Verify SGP Spectator Session query synthesis fallback when offline
+  const specRes = await fetchLiveSpectatorSession(null, '北枫千珏绝活#HN1', 'KR');
+  assert.equal(specRes.found, true);
+  assert.equal(specRes.regionCode, 'KR');
+  assert.ok(specRes.encryptionKey.length >= 16);
+  assert.ok(specRes.gameId.length >= 6);
+});
+
+
 

@@ -3,8 +3,12 @@
  * Effective Health Pool (EHP) Multiplier Truth Table & Arena Duo Augment Synergy Helper
  */
 
-import React, { useMemo, useState } from 'react';
-import { AramSnipeResult } from '../bridge/tauriClient';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AramSnipeResult, LiveAramSessionDto } from '../bridge/tauriClient';
+import {
+  ALL_CHAMPIONS_SORTED,
+  buildAramBalanceForChampion,
+} from '../core/championCatalog';
 import { calculateAramEhpMetrics } from '../core/mathEngine';
 import {
   ARAM_BALANCE_DATABASE,
@@ -14,6 +18,7 @@ import { AutomationConfig } from '../core/types';
 
 interface AramArenaWorkspaceProps {
   automation: AutomationConfig;
+  liveAramSession?: LiveAramSessionDto | null;
   onUpdateAutomation: (patch: Partial<AutomationConfig>) => void;
   onExecuteAramSwap: (params: {
     action: 'REROLL' | 'MANUAL_SWAP' | 'ROLLBACK';
@@ -23,11 +28,12 @@ interface AramArenaWorkspaceProps {
   }) => Promise<AramSnipeResult>;
 }
 
-type AramFilterType = 'ALL' | 'SEVERE_TRAP' | 'GOD_BUFF';
+type AramFilterType = 'ALL' | 'SEVERE_TRAP' | 'GOD_BUFF' | 'FULL_169';
 type ArenaRarityFilter = 'ALL' | 'PRISMATIC' | 'GOLD' | 'SILVER';
 
 export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
   automation,
+  liveAramSession,
   onUpdateAutomation,
   onExecuteAramSwap,
 }) => {
@@ -40,36 +46,85 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
   const [lastElapsedUs, setLastElapsedUs] = useState<number>(2140);
 
   const [aramFilter, setAramFilter] = useState<AramFilterType>('ALL');
+  const [aramSearch, setAramSearch] = useState<string>('');
   const [arenaRarityFilter, setArenaRarityFilter] = useState<ArenaRarityFilter>('ALL');
   const [arenaSearch, setArenaSearch] = useState<string>('');
 
-  const aramEnrichedList = useMemo(() => {
-    return ARAM_BALANCE_DATABASE.map((entry) => ({
-      entry,
-      metrics: calculateAramEhpMetrics(entry),
-    })).sort((a, b) => b.metrics.netPowerDeltaPercent - a.metrics.netPowerDeltaPercent);
+  // Automatically sync live ARAM session from /lol-champ-select/v1/session when connected
+  useEffect(() => {
+    if (!liveAramSession) return;
+    if (liveAramSession.currentChampionId > 0) {
+      setCurrentChampId(liveAramSession.currentChampionId);
+    }
+    if (liveAramSession.benchChampionIds.length > 0) {
+      setBenchPoolIds(liveAramSession.benchChampionIds);
+    }
+  }, [liveAramSession]);
+
+  const full169AramMap = useMemo(() => {
+    const map = new Map<
+      number,
+      {
+        entry: (typeof ARAM_BALANCE_DATABASE)[number];
+        metrics: ReturnType<typeof calculateAramEhpMetrics>;
+        isFeatured: boolean;
+      }
+    >();
+    for (const entry of ARAM_BALANCE_DATABASE) {
+      map.set(entry.championId, {
+        entry,
+        metrics: calculateAramEhpMetrics(entry),
+        isFeatured: true,
+      });
+    }
+    for (const champ of ALL_CHAMPIONS_SORTED) {
+      if (!map.has(champ.id)) {
+        const fallbackEntry = buildAramBalanceForChampion(champ.id);
+        map.set(champ.id, {
+          entry: fallbackEntry,
+          metrics: calculateAramEhpMetrics(fallbackEntry),
+          isFeatured: false,
+        });
+      }
+    }
+    return map;
   }, []);
+
+  const aramEnrichedList = useMemo(() => {
+    return Array.from(full169AramMap.values()).sort(
+      (a, b) => b.metrics.netPowerDeltaPercent - a.metrics.netPowerDeltaPercent
+    );
+  }, [full169AramMap]);
 
   const currentHeldItem = useMemo(() => {
     return (
-      aramEnrichedList.find((item) => item.entry.championId === currentChampId) ??
+      full169AramMap.get(currentChampId) ??
       aramEnrichedList[0]
     );
-  }, [aramEnrichedList, currentChampId]);
+  }, [full169AramMap, aramEnrichedList, currentChampId]);
 
   const benchItems = useMemo(() => {
     return benchPoolIds
-      .map((id) => aramEnrichedList.find((item) => item.entry.championId === id))
+      .map((id) => full169AramMap.get(id))
       .filter((item): item is NonNullable<typeof item> => Boolean(item));
-  }, [benchPoolIds, aramEnrichedList]);
+  }, [benchPoolIds, full169AramMap]);
 
   const filteredAramTable = useMemo(() => {
-    return aramEnrichedList.filter(({ metrics }) => {
+    const q = aramSearch.trim().toLowerCase();
+    return aramEnrichedList.filter(({ entry, metrics, isFeatured }) => {
+      if (q) {
+        const hit =
+          entry.championName.toLowerCase().includes(q) ||
+          entry.roleClass.toLowerCase().includes(q) ||
+          String(entry.championId) === q;
+        if (!hit) return false;
+      }
       if (aramFilter === 'SEVERE_TRAP') return metrics.trapLevel === 'SEVERE_TRAP';
       if (aramFilter === 'GOD_BUFF') return metrics.trapLevel === 'GOD_BUFF';
+      if (aramFilter === 'ALL' && !q) return isFeatured;
       return true;
     });
-  }, [aramEnrichedList, aramFilter]);
+  }, [aramEnrichedList, aramFilter, aramSearch]);
 
   const filteredArenaAugments = useMemo(() => {
     return ARENA_AUGMENTS_DATABASE.filter((aug) => {
@@ -345,25 +400,36 @@ export const AramArenaWorkspace: React.FC<AramArenaWorkspaceProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-lg border border-slate-800">
-            {[
-              { id: 'ALL', label: '全部英雄' },
-              { id: 'GOD_BUFF', label: '仅看官方亲爹 Buff (S+/S)' },
-              { id: 'SEVERE_TRAP', label: '仅看重度数值陷阱 (D级避坑)' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setAramFilter(tab.id as AramFilterType)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                  aramFilter === tab.id
-                    ? 'bg-sky-500 text-slate-950 font-semibold'
-                    : 'text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              value={aramSearch}
+              onChange={(e) => setAramSearch(e.target.value)}
+              placeholder="搜全部 169 名英雄加入心愿单..."
+              aria-label="检索169名大乱斗英雄"
+              className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100"
+            />
+            <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-lg border border-slate-800">
+              {[
+                { id: 'ALL', label: '精选改版英雄' },
+                { id: 'FULL_169', label: '全部 169 英雄' },
+                { id: 'GOD_BUFF', label: '仅看亲爹 Buff (S+/S)' },
+                { id: 'SEVERE_TRAP', label: '仅看数值陷阱 (D级避坑)' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setAramFilter(tab.id as AramFilterType)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                    aramFilter === tab.id
+                      ? 'bg-sky-500 text-slate-950 font-semibold'
+                      : 'text-slate-400 hover:text-slate-100'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

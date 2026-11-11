@@ -6,6 +6,11 @@
 import React, { useMemo, useState } from 'react';
 import { BpSimulationResult } from '../bridge/tauriClient';
 import {
+  ALL_CHAMPIONS_SORTED,
+  buildAdaptiveRunePresetForChampion,
+  FULL_CHAMPION_CATALOG,
+} from '../core/championCatalog';
+import {
   calculateDodgeExpectedValue,
   detectPremadeSquads,
   diagnoseTeamComposition,
@@ -55,6 +60,7 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
   onInspectPlayerInAnalytics,
 }) => {
   const [dodgeCountToday, setDodgeCountToday] = useState<number>(0);
+  const [champSearchQuery, setChampSearchQuery] = useState<string>('');
   const [selectedTeammateHoverId, setSelectedTeammateHoverId] = useState<number>(53);
   const [bpDrillResult, setBpDrillResult] = useState<BpSimulationResult | null>(null);
   const [selectedRunePresetId, setSelectedRunePresetId] = useState<string>(RUNE_PAGE_PRESETS[0].id);
@@ -66,6 +72,27 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
 
   const [scoutFilter, setScoutFilter] = useState<ScoutFilterMode>('ALL');
   const [hoveredPremadeId, setHoveredPremadeId] = useState<string | null>(null);
+
+  const filteredCatalogChampions = useMemo(() => {
+    const q = champSearchQuery.trim().toLowerCase();
+    if (!q) return ALL_CHAMPIONS_SORTED;
+    return ALL_CHAMPIONS_SORTED.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.title.toLowerCase().includes(q) ||
+        String(c.id).includes(q) ||
+        c.primaryRole.toLowerCase().includes(q)
+    );
+  }, [champSearchQuery]);
+
+  const buildSelectListWithCurrent = (currentId: number) => {
+    const exists = filteredCatalogChampions.some((c) => c.id === currentId);
+    if (exists) return filteredCatalogChampions;
+    const currentEntry = FULL_CHAMPION_CATALOG[currentId];
+    return currentEntry
+      ? [currentEntry, ...filteredCatalogChampions]
+      : filteredCatalogChampions;
+  };
 
   const allies = useMemo(
     () => scoutProfiles.filter((p) => p.teamSide === 'ALLY'),
@@ -92,10 +119,16 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
     [allies, chatMode, enableZeroWidthObfuscation]
   );
 
-  const selectedRunePreset = useMemo(
-    () => RUNE_PAGE_PRESETS.find((r) => r.id === selectedRunePresetId) ?? RUNE_PAGE_PRESETS[0],
-    [selectedRunePresetId]
-  );
+  const selectedRunePreset = useMemo(() => {
+    if (selectedRunePresetId.startsWith('auto-champ-')) {
+      const champId =
+        Number.parseInt(selectedRunePresetId.replace('auto-champ-', ''), 10) || 203;
+      return buildAdaptiveRunePresetForChampion(champId);
+    }
+    return (
+      RUNE_PAGE_PRESETS.find((r) => r.id === selectedRunePresetId) ?? RUNE_PAGE_PRESETS[0]
+    );
+  }, [selectedRunePresetId]);
 
   const handleTriggerBpDrill = async () => {
     const res = await onRunBpSimulation(selectedTeammateHoverId);
@@ -405,79 +438,100 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                 </label>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    主选秒锁英雄
-                  </label>
-                  <select
-                    aria-label="主选秒锁英雄"
-                    value={automation.primaryPickChampionIds[0] ?? 203}
-                    onChange={(e) =>
-                      onUpdateAutomation({
-                        primaryPickChampionIds: [
-                          Number(e.target.value),
-                          ...automation.primaryPickChampionIds.slice(1),
-                        ],
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
-                  >
-                    <option value={203}>千珏 (203)</option>
-                    <option value={516}>奥恩 (516)</option>
-                    <option value={145}>卡莎 (145)</option>
-                    <option value={266}>亚托克斯 (266)</option>
-                    <option value={64}>李青 (64)</option>
-                    <option value={103}>阿狸 (103)</option>
-                    <option value={202}>烬 (202)</option>
-                    <option value={126}>杰斯 (126)</option>
-                  </select>
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-slate-400">
+                    全英雄库 ({ALL_CHAMPIONS_SORTED.length} 名英雄实时检索)：
+                  </span>
+                  <input
+                    type="search"
+                    value={champSearchQuery}
+                    onChange={(e) => setChampSearchQuery(e.target.value)}
+                    placeholder="搜英雄名/称号/ID (如: 梅尔, 800, 盲僧)..."
+                    aria-label="检索169名英雄"
+                    className="w-48 px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-[11px] text-slate-100"
+                  />
                 </div>
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    备选秒锁英雄
-                  </label>
-                  <select
-                    aria-label="备选秒锁英雄"
-                    value={automation.backupPickChampionIds[0] ?? 412}
-                    onChange={(e) =>
-                      onUpdateAutomation({
-                        backupPickChampionIds: [Number(e.target.value)],
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
-                  >
-                    <option value={412}>锤石 (412)</option>
-                    <option value={516}>奥恩 (516)</option>
-                    <option value={81}>伊泽瑞尔 (81)</option>
-                    <option value={61}>奥莉安娜 (61)</option>
-                    <option value={122}>德莱厄斯 (122)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    首选禁用英雄
-                  </label>
-                  <select
-                    aria-label="首选禁用英雄"
-                    value={automation.banChampionIds[0] ?? 53}
-                    onChange={(e) =>
-                      onUpdateAutomation({
-                        banChampionIds: [
-                          Number(e.target.value),
-                          897,
-                          238,
-                        ],
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
-                  >
-                    <option value={53}>布里茨 (53)</option>
-                    <option value={897}>奎桑提 (897)</option>
-                    <option value={238}>劫 (238)</option>
-                    <option value={157}>亚索 (157)</option>
-                    <option value={114}>菲奥娜 (114)</option>
-                  </select>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      主选秒锁英雄
+                    </label>
+                    <select
+                      aria-label="主选秒锁英雄"
+                      value={automation.primaryPickChampionIds[0] ?? 203}
+                      onChange={(e) => {
+                        const chosenId = Number(e.target.value);
+                        onUpdateAutomation({
+                          primaryPickChampionIds: [
+                            chosenId,
+                            ...automation.primaryPickChampionIds.slice(1),
+                          ],
+                        });
+                        setSelectedRunePresetId(`auto-champ-${chosenId}`);
+                      }}
+                      className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                    >
+                      {buildSelectListWithCurrent(
+                        automation.primaryPickChampionIds[0] ?? 203
+                      ).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}·{c.title} ({c.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      备选秒锁英雄
+                    </label>
+                    <select
+                      aria-label="备选秒锁英雄"
+                      value={automation.backupPickChampionIds[0] ?? 412}
+                      onChange={(e) =>
+                        onUpdateAutomation({
+                          backupPickChampionIds: [Number(e.target.value)],
+                        })
+                      }
+                      className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                    >
+                      {buildSelectListWithCurrent(
+                        automation.backupPickChampionIds[0] ?? 412
+                      ).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}·{c.title} ({c.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      首选禁用英雄
+                    </label>
+                    <select
+                      aria-label="首选禁用英雄"
+                      value={automation.banChampionIds[0] ?? 53}
+                      onChange={(e) =>
+                        onUpdateAutomation({
+                          banChampionIds: [
+                            Number(e.target.value),
+                            automation.banChampionIds[1] ?? 897,
+                            automation.banChampionIds[2] ?? 238,
+                          ],
+                        })
+                      }
+                      className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                    >
+                      {buildSelectListWithCurrent(automation.banChampionIds[0] ?? 53).map(
+                        (c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}·{c.title} ({c.id})
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -498,6 +552,13 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                     {HOVER_CANDIDATES.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
+                      </option>
+                    ))}
+                    {ALL_CHAMPIONS_SORTED.filter(
+                      (ch) => !HOVER_CANDIDATES.some((hc) => hc.id === ch.id)
+                    ).map((ch) => (
+                      <option key={ch.id} value={ch.id}>
+                        {ch.name} ({ch.title} · #{ch.id})
                       </option>
                     ))}
                   </select>
@@ -524,24 +585,42 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
           ) : (
             <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-400 font-mono tabular-nums">
               当前禁用队列：#{automation.banChampionIds.join(' -> #')} · 主选：#
-              {automation.primaryPickChampionIds[0] ?? 203}
+              {automation.primaryPickChampionIds[0] ?? 203} (
+              {FULL_CHAMPION_CATALOG[automation.primaryPickChampionIds[0] ?? 203]?.name ??
+                '千珏'}
+              )
             </div>
           )}
         </section>
 
-        {/* Col 6-8: Auto-Rune Hot Injector */}
+        {/* Col 6-8: Auto-Rune Hot Injector (Supports All 169 Champions) */}
         <section className="lg:col-span-3 p-5 rounded-xl bg-gray-900/90 border border-slate-800/80 flex flex-col justify-between">
           <div>
-            <h3 className="font-display text-sm font-bold text-slate-100">
-              04. 一键符文页热写入 (LCU Perks)
-            </h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-display text-sm font-bold text-slate-100">
+                04. 169 全英雄自适应符文热写入
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  const activeChampId =
+                    allies[0]?.currentChampionId ||
+                    automation.primaryPickChampionIds[0] ||
+                    203;
+                  setSelectedRunePresetId(`auto-champ-${activeChampId}`);
+                }}
+                className="text-[11px] text-sky-400 hover:text-sky-300 underline whitespace-nowrap"
+              >
+                匹配当前选用
+              </button>
+            </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              锁定英雄瞬间自动替换当前客户端符文页
+              支持全部 169 名英雄 9 槽位完整符文页自动装配与热替换
             </p>
 
             <div className="mt-3">
               <label htmlFor="rune-preset-select" className="sr-only">
-                选择高胜率符文配置
+                选择高胜率符文配置或全英雄自适应方案
               </label>
               <select
                 id="rune-preset-select"
@@ -549,11 +628,20 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
                 onChange={(e) => setSelectedRunePresetId(e.target.value)}
                 className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100"
               >
-                {RUNE_PAGE_PRESETS.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.championName} · {r.pageName} ({r.winRate}%)
-                  </option>
-                ))}
+                <optgroup label="精选高胜率专精符文页">
+                  {RUNE_PAGE_PRESETS.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.championName} · {r.pageName} ({r.winRate}%)
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="169 全英雄自适应 9 槽位符文生成">
+                  {ALL_CHAMPIONS_SORTED.map((c) => (
+                    <option key={`auto-champ-${c.id}`} value={`auto-champ-${c.id}`}>
+                      {c.name} ({c.title}) · 自适应高胜率符文页
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </div>
 
@@ -566,6 +654,9 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
               <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
                 {selectedRunePreset.perkNames.join(' · ')}
               </p>
+              <div className="text-[10px] font-mono tabular-nums text-sky-400/90 pt-0.5">
+                Perk IDs: [{selectedRunePreset.selectedPerkIds.join(', ')}]
+              </div>
             </div>
           </div>
 
@@ -575,7 +666,7 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
               onClick={handleInjectRune}
               className="w-full py-2 px-4 rounded-lg bg-sky-500 text-slate-950 text-xs font-semibold hover:bg-sky-400 transition-colors whitespace-nowrap"
             >
-              热写入至客户端符文页
+              热写入【{selectedRunePreset.championName}】符文页
             </button>
             {runeStatusMessage && (
               <p className="text-[11px] text-emerald-400 mt-1.5 font-mono">

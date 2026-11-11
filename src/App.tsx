@@ -9,6 +9,9 @@ import {
   AramSnipeResult,
   BpSimulationResult,
   ClientCosmeticPayload,
+  LiveAramSessionDto,
+  SpectatorLaunchResult,
+  SpectatorQueryResult,
   tauriBridgeClient,
 } from './bridge/tauriClient';
 import { AramArenaWorkspace } from './components/AramArenaWorkspace';
@@ -84,6 +87,8 @@ export function App() {
   const [matchTimeline, setMatchTimeline] = useState<TimelineMinutePoint[]>(
     MATCH_TIMELINE_FIXTURE
   );
+  const [liveAramSession, setLiveAramSession] =
+    useState<LiveAramSessionDto | null>(null);
   const [selectedPlayerPuuid, setSelectedPlayerPuuid] = useState<string | null>(
     () => buildHydratedScoutProfiles(INITIAL_BLACKLIST_LEDGER)[0]?.puuid ?? null
   );
@@ -105,6 +110,9 @@ export function App() {
         }
         if (res.matchTimeline && res.matchTimeline.length > 0) {
           setMatchTimeline(res.matchTimeline);
+        }
+        if (res.aramSession !== undefined) {
+          setLiveAramSession(res.aramSession);
         }
       })
       .catch(() => {
@@ -131,6 +139,9 @@ export function App() {
           if (res.matchTimeline && res.matchTimeline.length > 0) {
             setMatchTimeline(res.matchTimeline);
           }
+          if (res.aramSession !== undefined) {
+            setLiveAramSession(res.aramSession);
+          }
         })
         .catch(() => {
           // Ignore transient polling errors
@@ -152,6 +163,9 @@ export function App() {
       }
       if (res.matchTimeline && res.matchTimeline.length > 0) {
         setMatchTimeline(res.matchTimeline);
+      }
+      if (res.aramSession !== undefined) {
+        setLiveAramSession(res.aramSession);
       }
       setRingBuffer(res.ringBuffer);
       return { connected: res.connected, message: res.message };
@@ -326,6 +340,30 @@ export function App() {
     return { lobbyId: res.lobbyId, message: res.message };
   };
 
+  const handleQuerySpectatorSession = async (
+    targetSummoner: string,
+    regionCode: string
+  ): Promise<SpectatorQueryResult> => {
+    const res = await tauriBridgeClient.querySpectatorSession({
+      targetSummoner,
+      regionCode,
+    });
+    setRingBuffer(res.ringBuffer);
+    return res;
+  };
+
+  const handleLaunchLocalSpectator = async (params: {
+    spectatorDomain: string;
+    spectatorPort: number;
+    encryptionKey: string;
+    gameId: string;
+    regionCode: string;
+  }): Promise<SpectatorLaunchResult> => {
+    const res = await tauriBridgeClient.launchLocalSpectator(params);
+    setRingBuffer(res.ringBuffer);
+    return res;
+  };
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#090D16] text-slate-100">
       <TopBar
@@ -378,6 +416,7 @@ export function App() {
           {activeTab === 'aram-arena' && (
             <AramArenaWorkspace
               automation={automation}
+              liveAramSession={liveAramSession}
               onUpdateAutomation={handleUpdateAutomation}
               onExecuteAramSwap={handleExecuteAramSwap}
             />
@@ -392,6 +431,8 @@ export function App() {
               onExecuteLootDisenchant={handleExecuteLootDisenchant}
               onApplyClientCosmetic={handleApplyClientCosmetic}
               onCreatePracticeLobby={handleCreatePracticeLobby}
+              onQuerySpectatorSession={handleQuerySpectatorSession}
+              onLaunchLocalSpectator={handleLaunchLocalSpectator}
             />
           )}
 

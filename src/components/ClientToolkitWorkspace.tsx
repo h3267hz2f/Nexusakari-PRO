@@ -8,7 +8,11 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ClientCosmeticPayload } from '../bridge/tauriClient';
+import {
+  ClientCosmeticPayload,
+  SpectatorLaunchResult,
+  SpectatorQueryResult,
+} from '../bridge/tauriClient';
 import {
   calculateLootDisenchantPlan,
   calculateSmiteThreshold,
@@ -39,6 +43,17 @@ interface ClientToolkitWorkspaceProps {
     lobbyName: string,
     botCount: number
   ) => Promise<{ lobbyId: string; message: string }>;
+  onQuerySpectatorSession: (
+    targetSummoner: string,
+    regionCode: string
+  ) => Promise<SpectatorQueryResult>;
+  onLaunchLocalSpectator: (params: {
+    spectatorDomain: string;
+    spectatorPort: number;
+    encryptionKey: string;
+    gameId: string;
+    regionCode: string;
+  }) => Promise<SpectatorLaunchResult>;
 }
 
 interface EnemySpellOverride {
@@ -73,6 +88,8 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
   onExecuteLootDisenchant,
   onApplyClientCosmetic,
   onCreatePracticeLobby,
+  onQuerySpectatorSession,
+  onLaunchLocalSpectator,
 }) => {
   const activeLootShards = useMemo(
     () => (lootShards && lootShards.length > 0 ? lootShards : LOOT_SHARDS_INVENTORY),
@@ -236,11 +253,17 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
 
   // 3. SGP Cross-Region Delay-Free OB Spectator Builder state
   const [selectedObRegion, setSelectedObRegion] = useState<string>(activeRegion || 'HN1');
+  const [targetObSummoner, setTargetObSummoner] = useState<string>(
+    () => scoutProfiles[0]?.gameName ?? '北枫千珏绝活'
+  );
   const [obGameId, setObGameId] = useState<string>('7845920144');
   const [obEncryptionKey, setObEncryptionKey] = useState<string>(
     'k9X2mQpL8vR4wN7tY1zB5cF3hJ6gD0sA'
   );
+  const [customObDomain, setCustomObDomain] = useState<string | null>(null);
+  const [customObPort, setCustomObPort] = useState<number | null>(null);
   const [obCopiedNotice, setObCopiedNotice] = useState<string | null>(null);
+  const [isQueryingOb, setIsQueryingOb] = useState<boolean>(false);
 
   const obRegionConfig = useMemo(
     () =>
@@ -249,18 +272,40 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
     [selectedObRegion]
   );
 
+  const activeObDomain = customObDomain || obRegionConfig.spectatorDomain;
+  const activeObPort = customObPort || obRegionConfig.spectatorPort;
+
   const spectatorCliString = useMemo(() => {
     const cleanDir = installDirectory.replace(/\\+$/, '');
-    return `"${cleanDir}\\Game\\League of Legends.exe" "spectator ${obRegionConfig.spectatorDomain}:${obRegionConfig.spectatorPort} ${obEncryptionKey} ${obGameId} ${obRegionConfig.regionCode}" -UseRads -Locale=zh_CN`;
-  }, [installDirectory, obRegionConfig, obEncryptionKey, obGameId]);
+    return `"${cleanDir}\\Game\\League of Legends.exe" "spectator ${activeObDomain}:${activeObPort} ${obEncryptionKey} ${obGameId} ${obRegionConfig.regionCode}" -UseRads -Locale=zh_CN`;
+  }, [installDirectory, activeObDomain, activeObPort, obRegionConfig, obEncryptionKey, obGameId]);
 
-  const handleCopyObCommand = () => {
+  const handleFetchLiveObCredentials = async () => {
+    setIsQueryingOb(true);
+    try {
+      const res = await onQuerySpectatorSession(targetObSummoner, selectedObRegion);
+      setObGameId(res.gameId);
+      setObEncryptionKey(res.encryptionKey);
+      setCustomObDomain(res.spectatorDomain);
+      setCustomObPort(res.spectatorPort);
+      setObCopiedNotice(`[${res.source}] ${res.message}`);
+    } finally {
+      setIsQueryingOb(false);
+    }
+  };
+
+  const handleCopyAndLaunchOb = async () => {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(spectatorCliString).catch(() => {});
     }
-    setObCopiedNotice(
-      `已复制 ${obRegionConfig.regionName} 免延迟直连 OB 命令行（绕过客户端好友列表 3 分钟观战延迟锁）`
-    );
+    const launchRes = await onLaunchLocalSpectator({
+      spectatorDomain: activeObDomain,
+      spectatorPort: activeObPort,
+      encryptionKey: obEncryptionKey,
+      gameId: obGameId,
+      regionCode: obRegionConfig.regionCode,
+    });
+    setObCopiedNotice(launchRes.message);
   };
 
   // 4. Client Profile Cosmetics & 5v5 Practice Tool Lobby state
@@ -648,6 +693,33 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
             </p>
 
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="ob-summoner-input"
+                  className="block text-slate-400 mb-1"
+                >
+                  目标召唤师名称或 PUUID (通过 RCU JWT → SGP /gsm/v1/ledge/spectator 穿透查询)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="ob-summoner-input"
+                    type="text"
+                    value={targetObSummoner}
+                    onChange={(e) => setTargetObSummoner(e.target.value)}
+                    placeholder="输入召唤师昵称或PUUID..."
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={isQueryingOb}
+                    onClick={handleFetchLiveObCredentials}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 text-sky-400 border border-sky-500/40 font-semibold hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-50"
+                  >
+                    {isQueryingOb ? '查询中...' : '抓取实时对局密钥'}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label htmlFor="ob-region-select" className="block text-slate-400 mb-1">
                   目标观战大区节点
@@ -655,7 +727,11 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
                 <select
                   id="ob-region-select"
                   value={selectedObRegion}
-                  onChange={(e) => setSelectedObRegion(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedObRegion(e.target.value);
+                    setCustomObDomain(null);
+                    setCustomObPort(null);
+                  }}
                   className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
                 >
                   {SGP_REGION_REGISTRY.map((reg) => (
@@ -704,7 +780,7 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
             )}
             <button
               type="button"
-              onClick={handleCopyObCommand}
+              onClick={handleCopyAndLaunchOb}
               className="w-full py-2 px-4 rounded-lg bg-sky-500 text-slate-950 text-xs font-semibold hover:bg-sky-400 transition-colors"
             >
               复制跨区 OB 直连命令行 / 唤起本地客户端观战

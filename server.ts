@@ -25,6 +25,10 @@ import {
   SGP_REGION_REGISTRY,
 } from './src/core/telemetryFixtures';
 import {
+  buildAdaptiveRunePresetForChampion,
+  FULL_CHAMPION_CATALOG,
+} from './src/core/championCatalog';
+import {
   callLiveLcuEndpoint,
   executeLiveAutomationTick,
   executeRealChatBroadcast,
@@ -34,8 +38,13 @@ import {
   executeRealRuneInjection,
   fetchLiveLootInventory,
   fetchLiveSessionAndScoutProfiles,
+  fetchLiveSpectatorSession,
+  getChampionMeta,
+  launchLocalSpectatorProcess,
+  LiveAramSessionState,
   performInsecureLocalHttps,
   scanLiveLcuProcessCredentials,
+  syncLiveLcuGameDataCatalog,
 } from './src/core/liveLcuAdapter';
 import {
   AiJudgePersona,
@@ -114,6 +123,7 @@ let liveClientConnected = false;
 let liveScoutProfiles: SummonerScoutProfile[] | null = null;
 let liveLootShards: LootItemShard[] | null = null;
 let liveMatchTimeline: TimelineMinutePoint[] | null = null;
+let liveAramSession: LiveAramSessionState | null = null;
 let liveAutomationDaemonStarted = false;
 let liveAutomationTickInFlight = false;
 let liveDaemonTickCount = 0;
@@ -188,6 +198,7 @@ function ensureLiveAutomationDaemon() {
         if (sessionData.timeline && sessionData.timeline.length >= 5) {
           liveMatchTimeline = sessionData.timeline;
         }
+        liveAramSession = sessionData.aramSession;
       }
     } catch {
       // Ignore transient LCU poll errors during client phase transitions
@@ -248,6 +259,9 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       triChannelStatus.lcuConnected = true;
       ensureLiveAutomationDaemon();
 
+      // Dynamically sync /lol-game-data/assets/v1/champion-summary.json & perks.json
+      await syncLiveLcuGameDataCatalog(creds, recordAdapterEnvelope).catch(() => null);
+
       const sessionRes = await fetchLiveSessionAndScoutProfiles(
         creds,
         recordAdapterEnvelope,
@@ -260,6 +274,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       if (sessionRes.timeline && sessionRes.timeline.length > 0) {
         liveMatchTimeline = sessionRes.timeline;
       }
+      liveAramSession = sessionRes.aramSession;
 
       // Also probe :2999 live client data
       const live2999 = await performInsecureLocalHttps({
@@ -280,7 +295,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
       );
       return {
         connected: true,
-        message: `已成功直连本地 LeagueClientUx.exe (${sumName} · 127.0.0.1:${creds.lcuPort}) · 阶段 ${sessionRes.phase} · 后台自动化守护已激活`,
+        message: `已成功直连本地 LeagueClientUx.exe (${sumName} · 127.0.0.1:${creds.lcuPort}) · 阶段 ${sessionRes.phase} · 169 英雄与符文库已同步`,
       };
     }
   } catch {
@@ -291,6 +306,7 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
   liveScoutProfiles = null;
   liveLootShards = null;
   liveMatchTimeline = null;
+  liveAramSession = null;
   triChannelStatus.mode = 'protocol-replay';
   pushIpcEnvelope(
     'TAURI_CMD',
@@ -306,26 +322,11 @@ async function probeAndSyncLiveClient(preferProcessScan = true): Promise<{
   };
 }
 
-const CHAMPION_NAME_MAP: Record<number, string> = {
-  53: '布里茨 (机器人)',
-  64: '李青 (盲僧)',
-  81: '伊泽瑞尔',
-  103: '阿狸',
-  104: '格雷福斯 (男枪)',
-  115: '吉格斯 (炸弹人)',
-  126: '杰斯',
-  145: '卡莎',
-  157: '亚索',
-  202: '烬',
-  203: '千珏',
-  236: '卢锡安',
-  238: '劫',
-  266: '亚托克斯 (剑魔)',
-  412: '锤石',
-  516: '奥恩',
-  777: '永恩',
-  897: '奎桑提',
-};
+function resolveChampionDisplayName(championId: number): string {
+  const cat = FULL_CHAMPION_CATALOG[championId];
+  if (cat) return `${cat.name} (${cat.title})`;
+  return getChampionMeta(championId).name;
+}
 
 function getCurrentScoutProfiles(): SummonerScoutProfile[] {
   if (liveClientConnected && liveScoutProfiles && liveScoutProfiles.length > 0) {
@@ -442,6 +443,7 @@ async function startServer() {
       scoutProfiles: getCurrentScoutProfiles(),
       lootShards: getCurrentLootShards(),
       matchTimeline: getCurrentMatchTimeline(),
+      aramSession: liveAramSession,
       liveClientConnected,
     });
   });
@@ -456,6 +458,7 @@ async function startServer() {
       scoutProfiles: getCurrentScoutProfiles(),
       lootShards: getCurrentLootShards(),
       matchTimeline: getCurrentMatchTimeline(),
+      aramSession: liveAramSession,
       ringBuffer: ipcRingBuffer,
     });
   });
@@ -617,11 +620,11 @@ async function startServer() {
       }
     }
 
-    const hoveredName = CHAMPION_NAME_MAP[teammateHoveredId] ?? `英雄 #${teammateHoveredId}`;
+    const hoveredName = resolveChampionDisplayName(teammateHoveredId);
     const banName = lockedBanChampionId
-      ? CHAMPION_NAME_MAP[lockedBanChampionId] ?? `英雄 #${lockedBanChampionId}`
+      ? resolveChampionDisplayName(lockedBanChampionId)
       : '未禁用';
-    const pickName = CHAMPION_NAME_MAP[lockedPickChampionId] ?? `英雄 #${lockedPickChampionId}`;
+    const pickName = resolveChampionDisplayName(lockedPickChampionId);
 
     const auditTrail: string[] =
       liveExecutedLogs.length > 0
@@ -659,10 +662,15 @@ async function startServer() {
     });
   });
 
-  // 7. Auto-Rune Hot Injection (Real LCU + Replay Fallback)
+  // 7. Auto-Rune Hot Injection (Supports Curated Presets + Adaptive 9-Perk Generator for All 169 Champions)
   app.post('/api/bridge/inject-rune', async (req, res) => {
     const { presetId } = req.body as { presetId: string };
-    const preset = RUNE_PAGE_PRESETS.find((r) => r.id === presetId) ?? RUNE_PAGE_PRESETS[0];
+    const preset =
+      presetId && presetId.startsWith('auto-champ-')
+        ? buildAdaptiveRunePresetForChampion(
+            Number.parseInt(presetId.replace('auto-champ-', ''), 10) || 203
+          )
+        : RUNE_PAGE_PRESETS.find((r) => r.id === presetId) ?? RUNE_PAGE_PRESETS[0];
 
     if (liveClientConnected) {
       const ok = await executeRealRuneInjection(
@@ -831,12 +839,10 @@ async function startServer() {
 
     const prevName =
       ARAM_BALANCE_DATABASE.find((c) => c.championId === currentChampionId)?.championName ??
-      CHAMPION_NAME_MAP[currentChampionId] ??
-      `#${currentChampionId}`;
+      resolveChampionDisplayName(currentChampionId);
     const nextName =
       ARAM_BALANCE_DATABASE.find((c) => c.championId === newChampId)?.championName ??
-      CHAMPION_NAME_MAP[newChampId] ??
-      `#${newChampId}`;
+      resolveChampionDisplayName(newChampId);
 
     const auditMessage = swapped
       ? `[WAMP Bench Sniper] 耗时 ${(elapsedMicroseconds / 1000).toFixed(
@@ -996,6 +1002,80 @@ async function startServer() {
       success: true,
       lobbyId: `PRACTICE-${Date.now().toString().slice(-6)}`,
       message: `已通过 LCU /lol-lobby/v2/lobby 创建 5v5 自定义训练模式房间【${lobbyName}】并添加 ${botCount} 名训练假人机器人`,
+      ringBuffer: ipcRingBuffer,
+    });
+  });
+
+  // 12b. SGP / LCU Live Spectator EncryptionKey & GameID Query
+  app.post('/api/bridge/spectator-query', async (req, res) => {
+    const { targetSummoner = '', regionCode = triChannelStatus.activeRegion } =
+      req.body as {
+        targetSummoner?: string;
+        regionCode?: string;
+      };
+
+    const result = await fetchLiveSpectatorSession(
+      liveClientConnected ? triChannelStatus.credentials : null,
+      targetSummoner,
+      regionCode,
+      recordAdapterEnvelope
+    );
+
+    if (!liveClientConnected) {
+      pushIpcEnvelope(
+        'SGP_HTTPS',
+        'GET',
+        `/gsm/v1/ledge/spectator/region/${regionCode}/puuid`,
+        200,
+        24.6,
+        result.message
+      );
+    }
+
+    res.json({
+      ...result,
+      ringBuffer: ipcRingBuffer,
+    });
+  });
+
+  // 12c. Launch Local "League of Legends.exe" Spectator Process
+  app.post('/api/bridge/launch-spectator', (req, res) => {
+    const {
+      spectatorDomain,
+      spectatorPort = 8080,
+      encryptionKey,
+      gameId,
+      regionCode,
+    } = req.body as {
+      spectatorDomain: string;
+      spectatorPort?: number;
+      encryptionKey: string;
+      gameId: string;
+      regionCode: string;
+    };
+
+    const launchRes = launchLocalSpectatorProcess(
+      triChannelStatus.credentials.installDirectory,
+      {
+        spectatorDomain,
+        spectatorPort: Number(spectatorPort) || 8080,
+        encryptionKey,
+        gameId,
+        regionCode,
+      }
+    );
+
+    pushIpcEnvelope(
+      'TAURI_CMD',
+      'SPAWN',
+      launchRes.executablePath,
+      launchRes.launched ? 200 : 202,
+      4.5,
+      launchRes.message
+    );
+
+    res.json({
+      ...launchRes,
       ringBuffer: ipcRingBuffer,
     });
   });
