@@ -214,19 +214,8 @@ export function isTauriNativeRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__?.invoke);
 }
 
-function resolveBridgeUrl(url: string): string {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    const proto = window.location.protocol;
-    if (host === 'tauri.localhost' || proto === 'tauri:' || proto === 'asset:') {
-      return `http://127.0.0.1:32100${url}`;
-    }
-  }
-  return url;
-}
-
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(resolveBridgeUrl(url), {
+  const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -235,27 +224,6 @@ async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(errBody.error || `Bridge HTTP Error ${response.status}`);
   }
   return response.json() as Promise<T>;
-}
-
-/**
- * Dual-mode dispatcher: invokes Tauri 2 native Rust command when `window.__TAURI_INTERNALS__.invoke`
- * is present, and seamlessly falls back to the Express isomorphic bridge in Web Preview or Sidecar.
- */
-async function invokeOrFetch<T>(
-  tauriCmd: string,
-  tauriArgs: Record<string, unknown>,
-  httpUrl: string,
-  httpOptions?: RequestInit
-): Promise<T> {
-  if (isTauriNativeRuntime() && window.__TAURI_INTERNALS__?.invoke) {
-    try {
-      return await window.__TAURI_INTERNALS__.invoke<T>(tauriCmd, tauriArgs);
-    } catch {
-      // Fallback to local HTTP sidecar bridge if command delegates to Express sidecar
-      return apiJson<T>(httpUrl, httpOptions);
-    }
-  }
-  return apiJson<T>(httpUrl, httpOptions);
 }
 
 export const tauriBridgeClient = {
@@ -270,7 +238,11 @@ export const tauriBridgeClient = {
     aramSession?: LiveAramSessionDto | null;
     liveClientConnected?: boolean;
   }> {
-    return invokeOrFetch('get_bootstrap_state', {}, '/api/bridge/bootstrap');
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.getBootstrapState();
+    }
+    return apiJson('/api/bridge/bootstrap');
   },
 
   async probeLiveClient(): Promise<{
@@ -283,14 +255,11 @@ export const tauriBridgeClient = {
     aramSession?: LiveAramSessionDto | null;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'probe_live_lcu_client',
-      {},
-      '/api/bridge/probe-live-client',
-      {
-        method: 'POST',
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.probeLiveClient();
+    }
+    return apiJson('/api/bridge/probe-live-client', { method: 'POST' });
   },
 
   async setGameflowPhase(phase: GameflowPhase): Promise<{
@@ -299,30 +268,28 @@ export const tauriBridgeClient = {
     matchTimeline?: TimelineMinutePoint[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'set_gameflow_phase',
-      { phase },
-      '/api/bridge/phase',
-      {
-        method: 'POST',
-        body: JSON.stringify({ phase }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.setGameflowPhase(phase);
+    }
+    return apiJson('/api/bridge/phase', {
+      method: 'POST',
+      body: JSON.stringify({ phase }),
+    });
   },
 
   async switchSgpRegion(regionCode: string): Promise<{
     status: TriChannelStatus;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'switch_sgp_region',
-      { regionCode },
-      '/api/bridge/region',
-      {
-        method: 'POST',
-        body: JSON.stringify({ regionCode }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.switchSgpRegion(regionCode);
+    }
+    return apiJson('/api/bridge/region', {
+      method: 'POST',
+      body: JSON.stringify({ regionCode }),
+    });
   },
 
   async updateCredentials(credentials: Partial<LcuRcuCredentials>): Promise<{
@@ -332,42 +299,39 @@ export const tauriBridgeClient = {
     matchTimeline?: TimelineMinutePoint[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'update_credentials',
-      { credentials },
-      '/api/bridge/credentials',
-      {
-        method: 'POST',
-        body: JSON.stringify({ credentials }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.updateCredentials(credentials);
+    }
+    return apiJson('/api/bridge/credentials', {
+      method: 'POST',
+      body: JSON.stringify({ credentials }),
+    });
   },
 
   async updateAutomationConfig(config: Partial<AutomationConfig>): Promise<{
     automation: AutomationConfig;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'update_automation_config',
-      { config },
-      '/api/bridge/automation',
-      {
-        method: 'POST',
-        body: JSON.stringify({ config }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.updateAutomationConfig(config);
+    }
+    return apiJson('/api/bridge/automation', {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    });
   },
 
   async triggerBpSimulation(teammateHoveredId = 53): Promise<BpSimulationResult> {
-    return invokeOrFetch(
-      'trigger_bp_simulation',
-      { teammateHoveredId },
-      '/api/bridge/simulate-bp',
-      {
-        method: 'POST',
-        body: JSON.stringify({ teammateHoveredId }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.triggerBpSimulation(teammateHoveredId);
+    }
+    return apiJson('/api/bridge/simulate-bp', {
+      method: 'POST',
+      body: JSON.stringify({ teammateHoveredId }),
+    });
   },
 
   async injectRunePage(presetId: string): Promise<{
@@ -375,15 +339,14 @@ export const tauriBridgeClient = {
     message: string;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'inject_lcu_rune_page',
-      { presetId },
-      '/api/bridge/inject-rune',
-      {
-        method: 'POST',
-        body: JSON.stringify({ presetId }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.injectRunePage(presetId);
+    }
+    return apiJson('/api/bridge/inject-rune', {
+      method: 'POST',
+      body: JSON.stringify({ presetId }),
+    });
   },
 
   async broadcastLobbyChat(
@@ -395,15 +358,14 @@ export const tauriBridgeClient = {
     throttleIntervalMs: number;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'broadcast_lcu_lobby_chat',
-      { mode, lines },
-      '/api/bridge/broadcast-chat',
-      {
-        method: 'POST',
-        body: JSON.stringify({ mode, lines }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.broadcastLobbyChat(mode, lines);
+    }
+    return apiJson('/api/bridge/broadcast-chat', {
+      method: 'POST',
+      body: JSON.stringify({ mode, lines }),
+    });
   },
 
   async executeAramBenchSwap(params: {
@@ -412,15 +374,14 @@ export const tauriBridgeClient = {
     targetChampionId?: number;
     benchPoolIds: number[];
   }): Promise<AramSnipeResult> {
-    return invokeOrFetch(
-      'execute_lcu_aram_bench_swap',
-      { ...params },
-      '/api/bridge/aram-snipe',
-      {
-        method: 'POST',
-        body: JSON.stringify(params),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.executeAramBenchSwap(params);
+    }
+    return apiJson('/api/bridge/aram-snipe', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
   },
 
   async executeLootDisenchant(plan: LootDisenchantPlan): Promise<{
@@ -430,15 +391,14 @@ export const tauriBridgeClient = {
     orangeEssenceAdded: number;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'execute_lcu_loot_batch_craft',
-      { plan },
-      '/api/bridge/loot-disenchant',
-      {
-        method: 'POST',
-        body: JSON.stringify({ plan }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.executeLootDisenchant(plan);
+    }
+    return apiJson('/api/bridge/loot-disenchant', {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    });
   },
 
   async applyClientCosmetic(payload: ClientCosmeticPayload): Promise<{
@@ -446,15 +406,14 @@ export const tauriBridgeClient = {
     lcuEndpointsCalled: string[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'apply_lcu_cosmetic_spoof',
-      { ...payload },
-      '/api/bridge/cosmetic-spoof',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.applyClientCosmetic(payload);
+    }
+    return apiJson('/api/bridge/cosmetic-spoof', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
   async createCustomPracticeLobby(lobbyName: string, botCount: number): Promise<{
@@ -463,15 +422,14 @@ export const tauriBridgeClient = {
     message: string;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'create_lcu_practice_lobby',
-      { lobbyName, botCount },
-      '/api/bridge/practice-lobby',
-      {
-        method: 'POST',
-        body: JSON.stringify({ lobbyName, botCount }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.createCustomPracticeLobby(lobbyName, botCount);
+    }
+    return apiJson('/api/bridge/practice-lobby', {
+      method: 'POST',
+      body: JSON.stringify({ lobbyName, botCount }),
+    });
   },
 
   async addBlacklistEntry(
@@ -481,15 +439,14 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'add_blacklist_entry',
-      { entry },
-      '/api/bridge/blacklist',
-      {
-        method: 'POST',
-        body: JSON.stringify(entry),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.addBlacklistEntry(entry);
+    }
+    return apiJson('/api/bridge/blacklist', {
+      method: 'POST',
+      body: JSON.stringify(entry),
+    });
   },
 
   async removeBlacklistEntry(puuid: string): Promise<{
@@ -497,14 +454,13 @@ export const tauriBridgeClient = {
     scoutProfiles: SummonerScoutProfile[];
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'remove_blacklist_entry',
-      { puuid },
-      `/api/bridge/blacklist/${encodeURIComponent(puuid)}`,
-      {
-        method: 'DELETE',
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.removeBlacklistEntry(puuid);
+    }
+    return apiJson(`/api/bridge/blacklist/${encodeURIComponent(puuid)}`, {
+      method: 'DELETE',
+    });
   },
 
   async requestAiMatchReview(params: {
@@ -513,30 +469,28 @@ export const tauriBridgeClient = {
     players: SummonerScoutProfile[];
     throwPoints: ThrowPointEvidence[];
   }): Promise<AiJudgeReport> {
-    return invokeOrFetch(
-      'request_ai_match_review',
-      { ...params },
-      '/api/ai/match-review',
-      {
-        method: 'POST',
-        body: JSON.stringify(params),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.requestAiMatchReview(params);
+    }
+    return apiJson('/api/ai/match-review', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
   },
 
   async querySpectatorSession(params: {
     targetSummoner: string;
     regionCode: string;
   }): Promise<SpectatorQueryResult> {
-    return invokeOrFetch(
-      'query_sgp_spectator_session',
-      { ...params },
-      '/api/bridge/spectator-query',
-      {
-        method: 'POST',
-        body: JSON.stringify(params),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.querySpectatorSession(params);
+    }
+    return apiJson('/api/bridge/spectator-query', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
   },
 
   async launchLocalSpectator(params: {
@@ -546,31 +500,36 @@ export const tauriBridgeClient = {
     gameId: string;
     regionCode: string;
   }): Promise<SpectatorLaunchResult> {
-    return invokeOrFetch(
-      'launch_local_spectator_process',
-      { ...params },
-      '/api/bridge/launch-spectator',
-      {
-        method: 'POST',
-        body: JSON.stringify(params),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.launchLocalSpectator(params);
+    }
+    return apiJson('/api/bridge/launch-spectator', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
   },
 
   async getExternalOverview(): Promise<{
     overview: ExternalMetaOverviewDto;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch('get_external_overview', {}, '/api/external/overview');
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.getExternalOverview(false);
+    }
+    return apiJson('/api/external/overview');
   },
 
   async syncExternalData(): Promise<{
     overview: ExternalMetaOverviewDto;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch('sync_external_data', {}, '/api/external/sync', {
-      method: 'POST',
-    });
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.getExternalOverview(true);
+    }
+    return apiJson('/api/external/sync', { method: 'POST' });
   },
 
   async getExternalChampionBuild(
@@ -580,14 +539,14 @@ export const tauriBridgeClient = {
     detail: ExternalChampionBuildDetailDto;
     ringBuffer: IpcEnvelope[];
   }> {
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.getExternalChampionBuild(championId, position);
+    }
     const query = position
       ? `?championId=${championId}&position=${encodeURIComponent(position)}`
       : `?championId=${championId}`;
-    return invokeOrFetch(
-      'get_external_champion_build',
-      { championId, position },
-      `/api/external/champion-build${query}`
-    );
+    return apiJson(`/api/external/champion-build${query}`);
   },
 
   async injectCustomRunePage(customRunePage: {
@@ -601,16 +560,16 @@ export const tauriBridgeClient = {
     message: string;
     ringBuffer: IpcEnvelope[];
   }> {
-    return invokeOrFetch(
-      'inject_custom_lcu_rune_page',
-      { customRunePage },
-      '/api/bridge/inject-rune',
-      {
-        method: 'POST',
-        body: JSON.stringify({ customRunePage }),
-      }
-    );
+    if (isTauriNativeRuntime()) {
+      const { tauriNativeEngine } = await import('./tauriNativeEngine');
+      return tauriNativeEngine.injectCustomRunePage(customRunePage);
+    }
+    return apiJson('/api/bridge/inject-rune', {
+      method: 'POST',
+      body: JSON.stringify({ customRunePage }),
+    });
   },
 };
+
 
 

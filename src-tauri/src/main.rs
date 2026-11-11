@@ -1,92 +1,29 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
+use base64::Engine;
+use nexus_akari_pro_lib::automation::AutomationConfig;
 use nexus_akari_pro_lib::lcu_connector::{IpcEnvelope, LcuRcuCredentials};
 use nexus_akari_pro_lib::AppKernelState;
-use serde_json::Value;
+use reqwest::Method;
+use serde_json::{json, Value};
 use std::env;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::fs;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::State;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-fn resolve_app_root() -> PathBuf {
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            return parent.to_path_buf();
-        }
-    }
-    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-fn spawn_local_bridge_sidecar(app_root: &Path, port: u16) -> Option<Child> {
-    let candidates = [
-        (
-            app_root.join("runtime").join("node.exe"),
-            app_root.join("runtime").join("server.cjs"),
-        ),
-        (
-            app_root.join("resources").join("runtime").join("node.exe"),
-            app_root.join("resources").join("runtime").join("server.cjs"),
-        ),
-        (
-            PathBuf::from("node"),
-            app_root.join("runtime").join("server.cjs"),
-        ),
-        (
-            PathBuf::from("node"),
-            app_root.join("dist-server").join("server.cjs"),
-        ),
-    ];
-
-    let mut selected: Option<(PathBuf, PathBuf)> = None;
-    for (node_bin, script_path) in candidates {
-        if script_path.exists() && (node_bin == Path::new("node") || node_bin.exists()) {
-            selected = Some((node_bin, script_path));
-            break;
-        }
-    }
-
-    let (node_bin, server_script) = selected?;
-
-    let mut cmd = Command::new(node_bin);
-    cmd.arg(server_script)
-        .current_dir(app_root)
-        .env("NODE_ENV", "production")
-        .env("PORT", port.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    #[cfg(target_os = "windows")]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    cmd.spawn().ok()
-}
-
-fn terminate_sidecar_tree(child: &mut Child) {
-    #[cfg(target_os = "windows")]
-    {
-        let pid = child.id();
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
+fn resolve_user_state_path() -> PathBuf {
+    let base = env::var("APPDATA")
+        .or_else(|_| env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| env::temp_dir());
+    let dir = base.join("NexusAkariPro");
+    let _ = fs::create_dir_all(&dir);
+    dir.join("nexus-akari-user-state.json")
 }
 
 #[tauri::command]
@@ -97,10 +34,347 @@ async fn probe_lcu_rcu_credentials_cmd(
 }
 
 #[tauri::command]
+async fn set_manual_credentials_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    credentials: LcuRcuCredentials,
+) -> Result<LcuRcuCredentials, String> {
+    {
+        let mut guard = state.credentials.write().await;
+        *guard = Some(credentials.clone());
+    }
+    Ok(credentials)
+}
+
+#[tauri::command]
+async fn set_active_region_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    region_code: String,
+) -> Result<String, String> {
+    {
+        let mut guard = state.active_region.write().await;
+        *guard = region_code.clone();
+    }
+    Ok(region_code)
+}
+
+#[tauri::command]
+async fn update_automation_config_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    config: AutomationConfig,
+) -> Result<AutomationConfig, String> {
+    {
+        let mut guard = state.automation_config.write().await;
+        *guard = config.clone();
+    }
+    Ok(config)
+}
+
+#[tauri::command]
+async fn batch_scout_sgp_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    puuids: Vec<String>,
+) -> Result<Value, String> {
+    let pairs = state.batch_scout_sgp_players(puuids).await?;
+    let mut map = serde_json::Map::new();
+    for (puuid, res) in pairs {
+        if let Ok(val) = res {
+            map.insert(puuid, val);
+        }
+    }
+    Ok(Value::Object(map))
+}
+
+#[tauri::command]
 async fn get_ipc_ring_buffer_cmd(
     state: State<'_, Arc<AppKernelState>>,
 ) -> Result<Vec<IpcEnvelope>, String> {
     state.get_ipc_ring_buffer().await
+}
+
+#[tauri::command]
+async fn lcu_raw_request_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    method: String,
+    endpoint: String,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let creds = state
+        .credentials
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "LCU not connected".to_string())?;
+    let http_method =
+        Method::from_bytes(method.to_uppercase().as_bytes()).unwrap_or(Method::GET);
+    state
+        .lcu_client
+        .lcu_request(&creds, http_method, &endpoint, body, &state.ring_buffer)
+        .await
+}
+
+#[tauri::command]
+async fn rcu_raw_request_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    endpoint: String,
+) -> Result<Value, String> {
+    let creds = state
+        .credentials
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "RCU not connected".to_string())?;
+    if creds.rcu_port == 0 || creds.rcu_auth_token.is_empty() {
+        return Err("RCU port/token not available".to_string());
+    }
+    let url = format!("https://127.0.0.1:{}{}", creds.rcu_port, endpoint);
+    let auth_header = format!(
+        "Basic {}",
+        BASE64_STD.encode(format!("riot:{}", creds.rcu_auth_token))
+    );
+    let started = std::time::Instant::now();
+    let resp = state
+        .lcu_client
+        .inner_client()
+        .get(&url)
+        .header("Authorization", auth_header)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    let val: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    state
+        .ring_buffer
+        .push(IpcEnvelope {
+            id: format!("rcu-{}", chrono::Utc::now().timestamp_micros()),
+            timestamp: chrono::Utc::now().format("%H:%M:%S%.3f").to_string(),
+            channel: "RCU_AUTH".to_string(),
+            method: "GET".to_string(),
+            endpoint,
+            status,
+            duration_ms: (elapsed_ms * 10.0).round() / 10.0,
+            payload_summary: format!("RCU HTTPS Response ({})", status),
+        })
+        .await;
+
+    if (200..300).contains(&status) {
+        Ok(val)
+    } else {
+        Err(format!("RCU HTTP {}", status))
+    }
+}
+
+#[tauri::command]
+async fn live_2999_request_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    endpoint: String,
+) -> Result<Value, String> {
+    let url = format!("https://127.0.0.1:2999{}", endpoint);
+    let started = std::time::Instant::now();
+    let resp = state
+        .lcu_client
+        .inner_client()
+        .get(&url)
+        .timeout(Duration::from_millis(1200))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let val: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    state
+        .ring_buffer
+        .push(IpcEnvelope {
+            id: format!("live2999-{}", chrono::Utc::now().timestamp_micros()),
+            timestamp: chrono::Utc::now().format("%H:%M:%S%.3f").to_string(),
+            channel: "LIVE_2999".to_string(),
+            method: "GET".to_string(),
+            endpoint,
+            status,
+            duration_ms: (elapsed_ms * 10.0).round() / 10.0,
+            payload_summary: "LiveClientData :2999 telemetry frame".to_string(),
+        })
+        .await;
+
+    Ok(val)
+}
+
+#[tauri::command]
+async fn external_http_get_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    url: String,
+    bearer_token: Option<String>,
+) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(7))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client
+        .get(&url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NexusAkariPro/4.0",
+        )
+        .header("Accept", "application/json, text/javascript, */*");
+    if let Some(ref token) = bearer_token {
+        if !token.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let raw_text = resp.text().await.map_err(|e| e.to_string())?;
+    let val: Value = serde_json::from_str(&raw_text).map_err(|e| e.to_string())?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    state
+        .ring_buffer
+        .push(IpcEnvelope {
+            id: format!("ext-http-{}", chrono::Utc::now().timestamp_micros()),
+            timestamp: chrono::Utc::now().format("%H:%M:%S%.3f").to_string(),
+            channel: "SGP_HTTPS".to_string(),
+            method: "GET".to_string(),
+            endpoint: url.chars().take(80).collect(),
+            status,
+            duration_ms: (elapsed_ms * 10.0).round() / 10.0,
+            payload_summary: format!("Native Rust External HTTP -> {}", status),
+        })
+        .await;
+
+    if (200..300).contains(&status) {
+        Ok(val)
+    } else {
+        Err(format!("External HTTP {}", status))
+    }
+}
+
+#[tauri::command]
+async fn load_user_state_cmd() -> Result<Option<Value>, String> {
+    let path = resolve_user_state_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(Some(parsed))
+}
+
+#[tauri::command]
+async fn save_user_state_cmd(payload: Value) -> Result<bool, String> {
+    let path = resolve_user_state_path();
+    let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&path, serialized).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn launch_spectator_process_cmd(
+    state: State<'_, Arc<AppKernelState>>,
+    spectator_domain: String,
+    spectator_port: u16,
+    encryption_key: String,
+    game_id: String,
+    region_code: String,
+) -> Result<Value, String> {
+    let mut candidate_dirs: Vec<PathBuf> = vec![
+        PathBuf::from(r"C:\Riot Games\League of Legends\Game"),
+        PathBuf::from(r"D:\Riot Games\League of Legends\Game"),
+        PathBuf::from(r"C:\WeGameApps\英雄联盟\Game"),
+        PathBuf::from(r"D:\WeGameApps\英雄联盟\Game"),
+        PathBuf::from(r"E:\WeGameApps\英雄联盟\Game"),
+    ];
+
+    if let Some(creds) = state.credentials.read().await.clone() {
+        if !creds.install_directory.is_empty() {
+            let p = PathBuf::from(&creds.install_directory);
+            candidate_dirs.insert(0, p.join("Game"));
+            candidate_dirs.insert(1, p);
+        }
+        if let Ok(val) = state
+            .lcu_client
+            .lcu_request(
+                &creds,
+                Method::GET,
+                "/data-store/v1/install-dir",
+                None,
+                &state.ring_buffer,
+            )
+            .await
+        {
+            if let Some(dir_str) = val.as_str() {
+                let p = PathBuf::from(dir_str);
+                candidate_dirs.insert(0, p.join("Game"));
+                candidate_dirs.insert(1, p);
+            }
+        }
+    }
+
+    let mut found_exe: Option<(PathBuf, PathBuf)> = None;
+    for dir in candidate_dirs {
+        let exe = dir.join("League of Legends.exe");
+        if exe.exists() {
+            found_exe = Some((exe, dir));
+            break;
+        }
+    }
+
+    let spec_arg = format!(
+        "spectator {}:{} {} {} {}",
+        spectator_domain, spectator_port, encryption_key, game_id, region_code
+    );
+    let default_exe_str = r"C:\Riot Games\League of Legends\Game\League of Legends.exe";
+    let cli_command = format!(
+        "\"{}\" \"{}\" \"-UseRads\" \"-GameBaseDir=..\"",
+        found_exe
+            .as_ref()
+            .map(|(e, _)| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| default_exe_str.to_string()),
+        spec_arg
+    );
+
+    if let Some((exe_path, game_dir)) = found_exe {
+        let mut cmd = Command::new(&exe_path);
+        cmd.current_dir(&game_dir)
+            .args([&spec_arg, "-UseRads", "-GameBaseDir=.."])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        match cmd.spawn() {
+            Ok(_) => Ok(json!({
+                "launched": true,
+                "executablePath": exe_path.to_string_lossy(),
+                "cliCommand": cli_command,
+                "message": format!("已直接启动本地 League of Legends.exe 进入 {} ({}) 实时 OB 观战！", region_code, game_id),
+            })),
+            Err(e) => Ok(json!({
+                "launched": false,
+                "executablePath": exe_path.to_string_lossy(),
+                "cliCommand": cli_command,
+                "message": format!("启动 League of Legends.exe 失败 ({})，请复制下方命令行手动运行。", e),
+            })),
+        }
+    } else {
+        Ok(json!({
+            "launched": false,
+            "executablePath": default_exe_str,
+            "cliCommand": cli_command,
+            "message": "当前环境未扫描到本机 League of Legends.exe 路径，已生成标准 OB 命令行参数。",
+        }))
+    }
 }
 
 #[tauri::command]
@@ -141,36 +415,7 @@ async fn fetch_external_opgg_meta_cmd(
     } else {
         "https://lol-api-champion.op.gg/api/KR/champions/ranked?tier=emerald_plus"
     };
-    let started = std::time::Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(7))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 NexusAkariPro/4.0")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = resp.status().as_u16();
-    let val: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-
-    state
-        .ring_buffer
-        .push(IpcEnvelope {
-            id: format!("ext-opgg-{}", chrono::Utc::now().timestamp_micros()),
-            timestamp: chrono::Utc::now().format("%H:%M:%S%.3f").to_string(),
-            channel: "SGP_HTTPS".to_string(),
-            method: "GET".to_string(),
-            endpoint: url.to_string(),
-            status,
-            duration_ms: (elapsed_ms * 10.0).round() / 10.0,
-            payload_summary: format!("Native Rust OP.GG {} live meta synced", mode),
-        })
-        .await;
-
-    Ok(val)
+    external_http_get_cmd(state, url.to_string(), None).await
 }
 
 fn main() {
@@ -192,18 +437,9 @@ fn main() {
         return;
     }
 
-    let port: u16 = env::var("PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(32100);
-    let app_root = resolve_app_root();
-    let sidecar_holder: Arc<Mutex<Option<Child>>> =
-        Arc::new(Mutex::new(spawn_local_bridge_sidecar(&app_root, port)));
-
     let state_for_setup = Arc::clone(&state);
-    let sidecar_for_event = Arc::clone(&sidecar_holder);
 
-    let tauri_result = tauri::Builder::default()
+    let _ = tauri::Builder::default()
         .manage(Arc::clone(&state))
         .setup(move |_app| {
             let st = Arc::clone(&state_for_setup);
@@ -211,46 +447,58 @@ fn main() {
                 let _ = st.probe_lcu_rcu_credentials().await;
                 let _watchdog = st.start_background_watchdog();
                 let mut ticker = tokio::time::interval(Duration::from_millis(1500));
+                let mut last_lifecycle_phase = String::new();
+
                 loop {
                     ticker.tick().await;
-                    if st.credentials.read().await.is_some() {
-                        let _ = st.execute_champ_select_tick().await;
+                    let creds_opt = st.credentials.read().await.clone();
+                    if let Some(ref creds) = creds_opt {
+                        let phase_val = st
+                            .lcu_client
+                            .lcu_request(
+                                creds,
+                                Method::GET,
+                                "/lol-gameflow/v1/gameflow-phase",
+                                None,
+                                &st.ring_buffer,
+                            )
+                            .await;
+                        if let Ok(val) = phase_val {
+                            let phase = val.as_str().unwrap_or("Lobby").to_string();
+                            if phase == "ChampSelect" {
+                                let _ = st.execute_champ_select_tick().await;
+                            } else if phase != last_lifecycle_phase
+                                && (phase == "ReadyCheck"
+                                    || phase == "Reconnect"
+                                    || phase == "EndOfGame")
+                            {
+                                let _ = st.run_lifecycle_automation(&phase).await;
+                            }
+                            last_lifecycle_phase = phase;
+                        }
                     }
                 }
             });
             Ok(())
         })
-        .on_window_event(move |_window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Ok(mut guard) = sidecar_for_event.lock() {
-                    if let Some(ref mut child) = *guard {
-                        terminate_sidecar_tree(child);
-                    }
-                    *guard = None;
-                }
-            }
-        })
         .invoke_handler(tauri::generate_handler![
             probe_lcu_rcu_credentials_cmd,
+            set_manual_credentials_cmd,
+            set_active_region_cmd,
+            update_automation_config_cmd,
+            batch_scout_sgp_cmd,
             get_ipc_ring_buffer_cmd,
+            lcu_raw_request_cmd,
+            rcu_raw_request_cmd,
+            live_2999_request_cmd,
+            external_http_get_cmd,
+            load_user_state_cmd,
+            save_user_state_cmd,
+            launch_spectator_process_cmd,
             inject_lcu_rune_page_cmd,
             execute_lcu_aram_bench_swap_cmd,
             execute_champ_select_tick_cmd,
             fetch_external_opgg_meta_cmd,
         ])
         .run(tauri::generate_context!());
-
-    if tauri_result.is_err() {
-        // Fallback if WebView2 runtime is missing on an older Windows system: keep sidecar alive
-        if let Ok(mut guard) = sidecar_holder.lock() {
-            if let Some(ref mut child) = *guard {
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) | Err(_) => break,
-                        Ok(None) => std::thread::sleep(Duration::from_millis(1000)),
-                    }
-                }
-            }
-        }
-    }
 }

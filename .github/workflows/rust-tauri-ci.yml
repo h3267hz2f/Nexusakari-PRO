@@ -35,10 +35,8 @@ jobs:
       - name: Run Deterministic v4 Math Engine & External API Unit Tests (node:test)
         run: npx --yes tsx --test src/core/mathEngine.test.ts
 
-      - name: Build Production Frontend & Self-Contained Bridge Bundle
-        run: |
-          npm run build
-          npm run build:server
+      - name: Build Production Frontend Bundle
+        run: npm run build
 
   rust-tauri-kernel-test:
     name: Rust + Tauri 2 Kernel Unit Tests & Clippy Audit (${{ matrix.os }})
@@ -84,7 +82,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   windows-desktop-installer:
-    name: Build Tauri 2 Native Windows x64 NSIS / MSI & Portable Bundles
+    name: Build Ultra-Slim (<5MB) Pure Rust Tauri 2 Windows x64 Installers
     needs: [ts-math-and-web-build, rust-tauri-kernel-test]
     runs-on: windows-latest
     steps:
@@ -99,80 +97,55 @@ jobs:
       - name: Setup Rust Stable Toolchain (x86_64-pc-windows-msvc)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Node Dependencies & Build Frontend + Standalone Bridge Sidecar
+      - name: Install Node Dependencies & Build Frontend Dist
         run: |
           npm install --legacy-peer-deps
           npm run build
-          npm run build:server
-
-      - name: Stage Sidecar Runtime into src-tauri/runtime for Tauri 2 Bundler
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path "src-tauri/runtime" | Out-Null
-          Copy-Item "dist-server/server.cjs" "src-tauri/runtime/server.cjs" -Force
-          $nodePath = (Get-Command node).Source
-          Copy-Item $nodePath "src-tauri/runtime/node.exe" -Force
 
       - name: Build Official Tauri 2 Native NSIS & MSI Installers (@tauri-apps/cli@2)
         run: npx --yes @tauri-apps/cli@2 build --bundles nsis,msi
 
-      - name: Compile setup_stub.exe & Run Smoke Tests on Native Executables
+      - name: Smoke-Test Stripped Native Tauri 2 Executable
         shell: pwsh
         run: |
-          cargo build --release --bin setup_stub --manifest-path src-tauri/Cargo.toml
           ./src-tauri/target/release/nexus-akari-pro.exe --smoke-test
-          ./src-tauri/target/release/setup_stub.exe --smoke-test
 
-      - name: Collect Tauri 2 NSIS/MSI Installers + Portable.zip & SFX Setup.exe
+      - name: Stage Pure Rust Tauri 2 NSIS, MSI & Portable Bundles (Zero node.exe)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path "release-stage/dist" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-stage/runtime" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-bundles" | Out-Null
+          New-Item -ItemType Directory -Force -Path "release-nsis" | Out-Null
+          New-Item -ItemType Directory -Force -Path "release-msi-portable" | Out-Null
 
-          # 1. Copy official Tauri 2 NSIS & MSI bundles produced by `tauri build`
           if (Test-Path "src-tauri/target/release/bundle/nsis") {
-            Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" "release-bundles/" -Force
+            Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" "release-nsis/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe" -Force
           }
           if (Test-Path "src-tauri/target/release/bundle/msi") {
-            Copy-Item "src-tauri/target/release/bundle/msi/*.msi" "release-bundles/" -Force
+            Copy-Item "src-tauri/target/release/bundle/msi/*.msi" "release-msi-portable/NexusAkari-Pro-v4.0.0-Windows-x64.msi" -Force
           }
 
-          # 2. Assemble Portable.zip and self-contained SFX Setup.exe
-          Copy-Item "src-tauri/target/release/nexus-akari-pro.exe" "release-stage/nexus-akari-pro.exe" -Force
-          Copy-Item "dist/*" "release-stage/dist/" -Recurse -Force
-          Copy-Item "src-tauri/runtime/*" "release-stage/runtime/" -Recurse -Force
+          Compress-Archive -Path "src-tauri/target/release/nexus-akari-pro.exe" -DestinationPath "release-msi-portable/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip" -Force
 
-          Set-Content -Path "release-stage/Start-NexusAkari-Pro.cmd" -Value "@echo off`r`nstart `"`" `"%~dp0nexus-akari-pro.exe`"" -Encoding ASCII
+          Write-Host "=== NSIS Setup Installer (~3-4 MB) ==="
+          Get-ChildItem release-nsis | Format-Table Name, @{Name="Size(MB)";Expression={[math]::Round($_.Length / 1MB, 2)}} -AutoSize
 
-          $zipPath = "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip"
-          $setupPath = "release-bundles/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe"
+          Write-Host "=== MSI & Portable Executable (~3-5 MB) ==="
+          Get-ChildItem release-msi-portable | Format-Table Name, @{Name="Size(MB)";Expression={[math]::Round($_.Length / 1MB, 2)}} -AutoSize
 
-          Compress-Archive -Path "release-stage/*" -DestinationPath $zipPath -Force
-
-          $stubBytes = [System.IO.File]::ReadAllBytes("src-tauri/target/release/setup_stub.exe")
-          $zipBytes  = [System.IO.File]::ReadAllBytes($zipPath)
-          $lenBytes  = [System.BitConverter]::GetBytes([uint64]$zipBytes.Length)
-          $magicBytes = [System.Text.Encoding]::ASCII.GetBytes("NAKP4SFX")
-
-          $outStream = [System.IO.File]::Create($setupPath)
-          $outStream.Write($stubBytes, 0, $stubBytes.Length)
-          $outStream.Write($zipBytes, 0, $zipBytes.Length)
-          $outStream.Write($lenBytes, 0, $lenBytes.Length)
-          $outStream.Write($magicBytes, 0, $magicBytes.Length)
-          $outStream.Close()
-
-          Get-ChildItem release-bundles | Format-Table Name, Length -AutoSize
-
-      - name: Upload Tauri 2 Windows x64 NSIS, MSI, Setup.exe & Portable.zip Artifacts
+      - name: Upload Ultra-Slim Tauri 2 NSIS Setup.exe (~3MB)
         uses: actions/upload-artifact@v4
         with:
           name: NexusAkari-Pro-v4.0.0-Windows-x64-Installer
+          path: release-nsis/NexusAkari-Pro-v4.0.0-Windows-x64-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Tauri 2 MSI & Portable Bundle (~4MB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusAkari-Pro-v4.0.0-Windows-x64-MSI-and-Portable
           path: |
-            release-bundles/*.exe
-            release-bundles/*.msi
-            release-bundles/*.zip
+            release-msi-portable/NexusAkari-Pro-v4.0.0-Windows-x64.msi
+            release-msi-portable/NexusAkari-Pro-v4.0.0-Windows-x64-Portable.zip
           if-no-files-found: error
           retention-days: 30
