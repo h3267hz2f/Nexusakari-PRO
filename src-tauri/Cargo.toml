@@ -25,7 +25,6 @@ tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "sync", "ti
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
-http = "1.1"
 futures-util = "0.3"
 dashmap = "6.1"
 base64 = "0.22"

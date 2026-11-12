@@ -128,6 +128,13 @@
   - 在 `AramArenaWorkspace.tsx` 中自动同步真机 `/lol-champ-select/v1/session` 的当前持有英雄与 `benchChampions` 备选席数组，并开放全部 169 名英雄的大乱斗平衡透视与心愿单检索添加。
   - 在 `ClientToolkitWorkspace.tsx` 中实现一键从 SGP/LCU 抓取目标召唤师实时对局 `encryptionKey` + `gameId` 并直接拉起本地 `"League of Legends.exe"` 进入免延迟 OB 观战。
 
+### [x] `Slice-19`: 7 项深度代码审计问题逐项整改与真机/双端对齐 (已完成)
+- **包含文件**：
+  - `/src-tauri/src/lcu_connector.rs`、`/src-tauri/src/lib.rs`、`/src-tauri/src/main.rs`、`/src/core/championCatalog.ts`、`/src/core/mathEngine.ts`、`/src/core/liveLcuAdapter.ts`、`/src/bridge/tauriNativeEngine.ts`、`/src/components/ClientToolkitWorkspace.tsx`、`/src/components/SmartBpWorkspace.tsx`、`/src/App.tsx`、`/server.ts`
 
-
-
+### [x] `Slice-20`: GitHub Actions Run #15 (`43124058308` / Commit `5417a93`) `rust-tauri-kernel-test` 失败根因修复与 Clippy `-D warnings` 硬化 (已完成)
+- **包含文件**：
+  - `/src-tauri/src/main.rs` (修复 `tokio::sync::broadcast::channel::<WampEventPayload>(128)` 在内部 `async move` 提前访问 `ev.uri` 引发的 `error[E0282]: type annotations needed`)
+  - `/src-tauri/src/lcu_connector.rs` (提取 `build_wamp_tls_connector()`、显式注册 `rustls::crypto::ring::default_provider().install_default()`、使用 `.into_owned()` 消除 Clippy 警告并补充含空格 Windows 路径参数单元测试)
+  - `/src-tauri/src/lib.rs` (消除 `inject_lcu_rune_page` 中嵌套 `if` 与 `.map(...).unwrap_or(false)` 以通过 `cargo clippy --all-targets -- -D warnings`)
+  - `/src-tauri/src/sgp_client.rs`、`/src-tauri/Cargo.toml`

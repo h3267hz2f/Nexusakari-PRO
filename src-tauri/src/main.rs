@@ -4,7 +4,7 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use base64::Engine;
 use nexus_akari_pro_lib::automation::AutomationConfig;
-use nexus_akari_pro_lib::lcu_connector::{IpcEnvelope, LcuRcuCredentials};
+use nexus_akari_pro_lib::lcu_connector::{IpcEnvelope, LcuRcuCredentials, WampEventPayload};
 use nexus_akari_pro_lib::AppKernelState;
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -446,20 +446,27 @@ fn main() {
                 let _ = st.probe_lcu_rcu_credentials().await;
                 let _watchdog = st.start_background_watchdog();
 
-                let (wamp_tx, mut wamp_rx) = tokio::sync::broadcast::channel(128);
+                let (wamp_tx, mut wamp_rx) =
+                    tokio::sync::broadcast::channel::<WampEventPayload>(128);
                 let st_wamp_runner = Arc::clone(&st);
 
                 // <5ms real-time WAMP v1.0 event-driven automation responder
                 tauri::async_runtime::spawn(async move {
                     while let Ok(ev) = wamp_rx.recv().await {
-                        if ev.uri == "/lol-champ-select/v1/session" {
-                            let _ = st_wamp_runner.execute_champ_select_tick().await;
-                        } else if ev.uri == "/lol-gameflow/v1/gameflow-phase" {
-                            if let Some(phase_str) = ev.data.as_str() {
-                                let _ = st_wamp_runner.run_lifecycle_automation(phase_str).await;
+                        match ev.uri.as_str() {
+                            "/lol-champ-select/v1/session" => {
+                                let _ = st_wamp_runner.execute_champ_select_tick().await;
                             }
-                        } else if ev.uri == "/lol-matchmaking/v1/ready-check" {
-                            let _ = st_wamp_runner.run_lifecycle_automation("ReadyCheck").await;
+                            "/lol-gameflow/v1/gameflow-phase" => {
+                                if let Some(phase_str) = ev.data.as_str() {
+                                    let _ =
+                                        st_wamp_runner.run_lifecycle_automation(phase_str).await;
+                                }
+                            }
+                            "/lol-matchmaking/v1/ready-check" => {
+                                let _ = st_wamp_runner.run_lifecycle_automation("ReadyCheck").await;
+                            }
+                            _ => {}
                         }
                     }
                 });

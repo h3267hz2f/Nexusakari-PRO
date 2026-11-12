@@ -208,6 +208,7 @@ impl Default for LcuRestClient {
 
 impl LcuRestClient {
     pub fn new() -> Self {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_millis(4500))
@@ -407,6 +408,19 @@ pub fn spawn_pid_watchdog(
     })
 }
 
+/// Builds a `tokio_tungstenite::Connector::Rustls` configured to accept Riot's local self-signed `riotgames.pem` certificate.
+pub fn build_wamp_tls_connector() -> Option<Connector> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let tls_config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .ok()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(InsecureLcuCertVerifier))
+        .with_no_client_auth();
+    Some(Connector::Rustls(Arc::new(tls_config)))
+}
+
 /// Connects to the local LCU WAMP v1.0 WebSocket (`wss://127.0.0.1:{lcu_port}/`) with Basic Auth
 /// and self-signed `riotgames.pem` certificate acceptance, sends `[5, "OnJsonApiEvent"]`,
 /// filters frames through `WampPrefixFilter`, and broadcasts `<5ms` real-time events.
@@ -429,19 +443,9 @@ pub fn spawn_wamp_subscriber_loop(
             request.headers_mut().insert("Authorization", auth_val);
         }
 
-        let tls_config = match rustls::ClientConfig::builder_with_provider(
-            rustls::crypto::ring::default_provider().into(),
-        )
-        .with_safe_default_protocol_versions()
-        {
-            Ok(builder) => builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(InsecureLcuCertVerifier))
-                .with_no_client_auth(),
-            Err(_) => return,
+        let Some(connector) = build_wamp_tls_connector() else {
+            return;
         };
-
-        let connector = Connector::Rustls(Arc::new(tls_config));
 
         if let Ok((mut ws_stream, _)) =
             connect_async_tls_with_config(request, None, false, Some(connector)).await
@@ -522,7 +526,7 @@ pub fn scan_dual_process_credentials_with_sys(sys: &mut System) -> Option<LcuRcu
             let args: Vec<String> = process
                 .cmd()
                 .iter()
-                .map(|s| s.to_string_lossy().to_string())
+                .map(|s| s.to_string_lossy().into_owned())
                 .collect();
 
             let lcu_port = extract_flag_from_args(&args, "--app-port=")
@@ -621,6 +625,17 @@ mod tests {
             extract_flag(sample_cmd, "--rso_platform_id="),
             Some("HN1".to_string())
         );
+
+        let discrete_args = vec![
+            "C:\\Program Files\\Riot Games\\League of Legends\\LeagueClientUx.exe".to_string(),
+            "--app-port=61234".to_string(),
+            "--install-directory=C:\\Program Files\\Riot Games\\League of Legends".to_string(),
+        ];
+        assert_eq!(
+            extract_flag_from_args(&discrete_args, "--install-directory="),
+            Some("C:\\Program Files\\Riot Games\\League of Legends".to_string())
+        );
+        assert!(build_wamp_tls_connector().is_some());
     }
 
     #[test]

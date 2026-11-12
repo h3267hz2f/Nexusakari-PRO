@@ -103,6 +103,7 @@ impl Default for SgpHttpClient {
 
 impl SgpHttpClient {
     pub fn new() -> Self {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_millis(6000))

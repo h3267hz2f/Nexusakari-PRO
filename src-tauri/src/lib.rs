@@ -139,26 +139,28 @@ impl AppKernelState {
                 .get("isDeletable")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            if is_deletable {
-                if let Some(page_id) = curr.get("id").and_then(|v| v.as_i64()) {
-                    deleted_any = self
-                        .lcu_client
-                        .lcu_request(
-                            &creds,
-                            Method::DELETE,
-                            &format!("/lol-perks/v1/pages/{}", page_id),
-                            None,
-                            &self.ring_buffer,
-                        )
-                        .await
-                        .is_ok();
-                }
+            let page_id_opt = if is_deletable {
+                curr.get("id").and_then(|v| v.as_i64())
+            } else {
+                None
+            };
+            if let Some(page_id) = page_id_opt {
+                deleted_any = self
+                    .lcu_client
+                    .lcu_request(
+                        &creds,
+                        Method::DELETE,
+                        &format!("/lol-perks/v1/pages/{}", page_id),
+                        None,
+                        &self.ring_buffer,
+                    )
+                    .await
+                    .is_ok();
             }
         }
 
-        if !deleted_any {
-            if let Ok(pages_val) = self
-                .lcu_client
+        let fallback_pages_opt = if !deleted_any {
+            self.lcu_client
                 .lcu_request(
                     &creds,
                     Method::GET,
@@ -167,38 +169,41 @@ impl AppKernelState {
                     &self.ring_buffer,
                 )
                 .await
-            {
-                if let Some(pages) = pages_val.as_array() {
-                    let target_page = pages
-                        .iter()
-                        .find(|p| {
-                            p.get("isDeletable").and_then(|v| v.as_bool()) == Some(true)
-                                && p.get("name")
-                                    .and_then(|n| n.as_str())
-                                    .map(|n| n.contains("NexusAkari") || n.contains("OP.GG"))
-                                    .unwrap_or(false)
-                        })
-                        .or_else(|| {
-                            pages.iter().find(|p| {
-                                p.get("isDeletable").and_then(|v| v.as_bool()) == Some(true)
-                            })
-                        });
+                .ok()
+        } else {
+            None
+        };
 
-                    if let Some(page_id) =
-                        target_page.and_then(|p| p.get("id")).and_then(|v| v.as_i64())
-                    {
-                        let _ = self
-                            .lcu_client
-                            .lcu_request(
-                                &creds,
-                                Method::DELETE,
-                                &format!("/lol-perks/v1/pages/{}", page_id),
-                                None,
-                                &self.ring_buffer,
-                            )
-                            .await;
-                    }
-                }
+        if let Some(pages) = fallback_pages_opt.as_ref().and_then(|v| v.as_array()) {
+            let target_page = pages
+                .iter()
+                .find(|p| {
+                    let deletable = p
+                        .get("isDeletable")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    deletable && (name.contains("NexusAkari") || name.contains("OP.GG"))
+                })
+                .or_else(|| {
+                    pages.iter().find(|p| {
+                        p.get("isDeletable")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    })
+                });
+
+            if let Some(page_id) = target_page.and_then(|p| p.get("id")).and_then(|v| v.as_i64()) {
+                let _ = self
+                    .lcu_client
+                    .lcu_request(
+                        &creds,
+                        Method::DELETE,
+                        &format!("/lol-perks/v1/pages/{}", page_id),
+                        None,
+                        &self.ring_buffer,
+                    )
+                    .await;
             }
         }
 
