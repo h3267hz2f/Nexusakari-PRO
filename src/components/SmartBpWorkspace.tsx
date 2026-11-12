@@ -38,6 +38,13 @@ interface SmartBpWorkspaceProps {
   onUpdateAutomation: (patch: Partial<AutomationConfig>) => void;
   onRunBpSimulation: (teammateHoveredId: number) => Promise<BpSimulationResult>;
   onInjectRunePage: (presetId: string) => Promise<string>;
+  onInjectCustomRunePage?: (customPage: {
+    name: string;
+    primaryStyleId: number;
+    subStyleId: number;
+    selectedPerkIds: number[];
+    winRate?: number;
+  }) => Promise<string>;
   onBroadcastChat: (mode: ChatReportMode, lines: string[]) => Promise<number>;
   onToggleInGameUnlock: () => void;
   onInspectPlayerInAnalytics: (puuid: string) => void;
@@ -59,6 +66,7 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
   onUpdateAutomation,
   onRunBpSimulation,
   onInjectRunePage,
+  onInjectCustomRunePage,
   onBroadcastChat,
   onToggleInGameUnlock,
   onInspectPlayerInAnalytics,
@@ -183,19 +191,30 @@ export const SmartBpWorkspace: React.FC<SmartBpWorkspaceProps> = ({
   };
 
   const handleInjectRune = async () => {
-    const activeOpggRune = externalBuild?.runeBuilds?.[selectedOpggRuneIndex];
+    const activeOpggRune =
+      externalBuild?.runeBuilds?.[selectedOpggRuneIndex] ??
+      externalBuild?.runeBuilds?.[0];
     if (activeOpggRune && activeOpggRune.selectedPerkIds.length >= 6) {
-      const res = await tauriBridgeClient.injectCustomRunePage({
+      const payload = {
         name: activeOpggRune.name,
         primaryStyleId: activeOpggRune.primaryStyleId,
         subStyleId: activeOpggRune.subStyleId,
         selectedPerkIds: activeOpggRune.selectedPerkIds,
         winRate: activeOpggRune.winRate,
-      });
-      setRuneStatusMessage(res.message);
+      };
+      if (onInjectCustomRunePage) {
+        const msg = await onInjectCustomRunePage(payload);
+        setRuneStatusMessage(msg);
+      } else {
+        const res = await tauriBridgeClient.injectCustomRunePage(payload);
+        setRuneStatusMessage(res.message);
+      }
       return;
     }
-    const msg = await onInjectRunePage(selectedRunePresetId);
+    const fallbackPresetId = selectedRunePresetId.startsWith('auto-champ-')
+      ? selectedRunePresetId
+      : `auto-champ-${externalChampId}`;
+    const msg = await onInjectRunePage(fallbackPresetId);
     setRuneStatusMessage(msg);
   };
 

@@ -1177,19 +1177,55 @@ export async function executeRealRuneInjection(
     );
   }
 
-  const createRes = await callLiveLcuEndpoint(
+  const pageBody = {
+    name: preset.pageName,
+    primaryStyleId: preset.primaryStyleId,
+    subStyleId: preset.subStyleId,
+    selectedPerkIds: preset.selectedPerkIds,
+    current: true,
+  };
+
+  let createRes = await callLiveLcuEndpoint(
     creds,
     'POST',
     '/lol-perks/v1/pages',
-    {
-      name: preset.pageName,
-      primaryStyleId: preset.primaryStyleId,
-      subStyleId: preset.subStyleId,
-      selectedPerkIds: preset.selectedPerkIds,
-      current: true,
-    },
+    pageBody,
     onEnvelope
   );
+
+  // Fallback: if active page was a non-deletable system preset and custom rune slots are full,
+  // evict the last deletable custom page from /lol-perks/v1/pages and retry.
+  if (!createRes.ok) {
+    const allPagesRes = await callLiveLcuEndpoint<any[]>(
+      creds,
+      'GET',
+      '/lol-perks/v1/pages',
+      undefined,
+      onEnvelope
+    );
+    if (allPagesRes.ok && Array.isArray(allPagesRes.data)) {
+      const deletable = [...allPagesRes.data]
+        .reverse()
+        .find((p) => p?.id && p.isDeletable !== false && p.isEditable !== false);
+      if (deletable?.id) {
+        await callLiveLcuEndpoint(
+          creds,
+          'DELETE',
+          `/lol-perks/v1/pages/${deletable.id}`,
+          undefined,
+          onEnvelope
+        );
+        createRes = await callLiveLcuEndpoint(
+          creds,
+          'POST',
+          '/lol-perks/v1/pages',
+          pageBody,
+          onEnvelope
+        );
+      }
+    }
+  }
+
   return createRes.ok;
 }
 

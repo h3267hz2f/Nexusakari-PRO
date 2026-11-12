@@ -71,13 +71,20 @@ const SKIN_SPLASH_PRESETS: Array<{ skinSplashId: number; skinName: string; champ
   { skinSplashId: 126024, skinName: '双城之战 幸存者 杰斯 (Arcane Survivor Jayce)', champion: '杰斯' },
 ];
 
-const SECONDARY_SPELL_BASE_CD: Record<string, number> = {
+const SPELL_BASE_CD_SECONDS: Record<string, number> = {
+  闪现: 300,
   传送: 360,
   引燃: 180,
   惩戒: 90,
   虚弱: 210,
   净化: 210,
+  治疗术: 240,
   治疗: 240,
+  幽灵疾步: 240,
+  疾跑: 240,
+  屏障: 180,
+  清晰术: 240,
+  '标记 (雪球)': 80,
 };
 
 export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
@@ -195,8 +202,8 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
 
     const baseCd =
       spellType === 'FLASH'
-        ? 300
-        : SECONDARY_SPELL_BASE_CD[enemy.spell2Name] ?? 210;
+        ? SPELL_BASE_CD_SECONDS[enemy.spell1Name] ?? 300
+        : SPELL_BASE_CD_SECONDS[enemy.spell2Name] ?? 210;
 
     const cdInfo = calculateSummonerSpellCooldown(
       baseCd,
@@ -217,7 +224,7 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
       },
     }));
 
-    const spellName = spellType === 'FLASH' ? '闪现' : enemy.spell2Name;
+    const spellName = spellType === 'FLASH' ? enemy.spell1Name || '闪现' : enemy.spell2Name;
     const alertText = `[NexusAkari:2999] 敌方 ${enemy.assignedRole} ${enemy.currentChampionName} [${spellName}] 已交 · 技能急速 +${cdInfo.totalSpellHaste} (真实CD ${cdInfo.realCooldownSeconds}s，省 ${cdInfo.secondsSaved}s)`;
     setCopiedTimerAlert(alertText);
     if (navigator.clipboard?.writeText) {
@@ -411,12 +418,13 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
               flashRemainingSec: 0,
               secondaryRemainingSec: 0,
             };
+            const primaryBaseCd = SPELL_BASE_CD_SECONDS[enemy.spell1Name] ?? 300;
             const flashCalc = calculateSummonerSpellCooldown(
-              300,
+              primaryBaseCd,
               st.hasCosmicInsight,
               st.hasIonianBoots
             );
-            const secBaseCd = SECONDARY_SPELL_BASE_CD[enemy.spell2Name] ?? 210;
+            const secBaseCd = SPELL_BASE_CD_SECONDS[enemy.spell2Name] ?? 210;
             const secCalc = calculateSummonerSpellCooldown(
               secBaseCd,
               st.hasCosmicInsight,
@@ -477,11 +485,13 @@ export const ClientToolkitWorkspace: React.FC<ClientToolkitWorkspaceProps> = ({
                         : 'bg-sky-500/15 border border-sky-500/40 text-sky-300 hover:bg-sky-500/25'
                     }`}
                   >
-                    <span>闪现 ({flashCalc.realCooldownSeconds}s)</span>
+                    <span>
+                      {enemy.spell1Name || '闪现'} ({flashCalc.realCooldownSeconds}s)
+                    </span>
                     <span>
                       {st.flashRemainingSec > 0
                         ? `冷却 ${st.flashRemainingSec}s`
-                        : '点闪计时'}
+                        : '点主技能'}
                     </span>
                   </button>
 

@@ -257,6 +257,18 @@ export function App() {
     return res.message;
   };
 
+  const handleInjectCustomRunePage = async (customPage: {
+    name: string;
+    primaryStyleId: number;
+    subStyleId: number;
+    selectedPerkIds: number[];
+    winRate?: number;
+  }): Promise<string> => {
+    const res = await tauriBridgeClient.injectCustomRunePage(customPage);
+    setRingBuffer(res.ringBuffer);
+    return res.message;
+  };
+
   const handleBroadcastChat = async (
     mode: ChatReportMode,
     lines: string[]
@@ -393,6 +405,7 @@ export function App() {
               onUpdateAutomation={handleUpdateAutomation}
               onRunBpSimulation={handleRunBpSimulation}
               onInjectRunePage={handleInjectRunePage}
+              onInjectCustomRunePage={handleInjectCustomRunePage}
               onBroadcastChat={handleBroadcastChat}
               onToggleInGameUnlock={handleToggleInGameUnlock}
               onInspectPlayerInAnalytics={handleInspectPlayerInAnalytics}

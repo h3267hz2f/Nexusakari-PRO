@@ -275,17 +275,85 @@ function mapRawPhase(raw: string): GameflowPhase {
   }
 }
 
+function extractNativePerkTelemetry(st: any) {
+  const items = [];
+  for (let i = 0; i < 6; i++) {
+    const perkId = Number(st?.[`perk${i}`] || 0);
+    if (perkId > 0) {
+      const v1 = Number(st?.[`perk${i}Var1`] || 0);
+      const v2 = Number(st?.[`perk${i}Var2`] || 0);
+      const v3 = Number(st?.[`perk${i}Var3`] || 0);
+      items.push({
+        perkId,
+        perkName: cachedPerkNames[perkId] || `符文 #${perkId}`,
+        styleName: i === 0 ? '核心基石' : i < 4 ? '主系符文' : '副系符文',
+        isKeystone: i === 0,
+        var1: v1,
+        var2: v2,
+        var3: v3,
+        primaryMetricLabel: `触发收益: ${v1} / ${v2} / ${v3}`,
+      });
+    }
+  }
+  return items;
+}
+
 function mapLcuMatchToPlayerStats(
   g: any,
   targetPuuid: string,
   fallbackRole: RoleType
 ): PlayerMatchStats | null {
-  const part = g?.participants?.[0];
-  if (!part || !part.stats) return null;
-  const st = part.stats;
+  if (!g || typeof g !== 'object') return null;
+
+  const identities: any[] = Array.isArray(g.participantIdentities)
+    ? g.participantIdentities
+    : [];
+  const participants: any[] = Array.isArray(g.participants) ? g.participants : [];
+
+  const selfIdentity = identities.find((id) => id?.player?.puuid === targetPuuid);
+  const selfPart =
+    participants.find(
+      (p) =>
+        (selfIdentity && p.participantId === selfIdentity.participantId) ||
+        p.puuid === targetPuuid
+    ) ?? participants[0];
+
+  if (!selfPart || !selfPart.stats) return null;
+
+  const st = selfPart.stats;
+  const teamId = selfPart.teamId ?? 100;
+  const teamParts = participants.filter((p) => (p.teamId ?? 100) === teamId);
+  const enemyParts = participants.filter((p) => (p.teamId ?? 100) !== teamId);
+
+  const sumStat = (arr: any[], key: string, fallback: number) => {
+    const total = arr.reduce((acc, p) => acc + Number(p?.stats?.[key] ?? 0), 0);
+    return total > 0 ? total : fallback;
+  };
+
+  const coPlayerPuuids: string[] = [];
+  const enemyPuuids: string[] = [];
+  for (const idObj of identities) {
+    const pId = idObj?.participantId;
+    const puuid = idObj?.player?.puuid;
+    if (!puuid || puuid === targetPuuid) continue;
+    const partObj = participants.find((p) => p.participantId === pId);
+    if (partObj && (partObj.teamId ?? 100) === teamId) {
+      coPlayerPuuids.push(String(puuid));
+    } else {
+      enemyPuuids.push(String(puuid));
+    }
+  }
+
   const durationMinutes = Math.max(10, Math.round((Number(g.gameDuration) || 1500) / 60));
-  const champId = Number(part.championId) || 266;
+  const champId = Number(selfPart.championId) || 266;
   const champMeta = FULL_CHAMPION_CATALOG[champId];
+  const kills = Number(st.kills) || 0;
+  const deaths = Number(st.deaths) || 0;
+  const assists = Number(st.assists) || 0;
+  const goldEarned = Number(st.goldEarned) || 9500;
+  const damageDealt = Number(st.totalDamageDealtToChampions) || 18000;
+  const damageTaken = Number(st.totalDamageTaken) || 21000;
+
   return {
     matchId: `LCU-${g.gameId || Date.now()}`,
     gameTimestamp: Number(g.gameCreation) || Date.now(),
@@ -297,28 +365,37 @@ function mapLcuMatchToPlayerStats(
     championTitle: champMeta?.title || '',
     role: champMeta?.primaryRole || fallbackRole,
     win: Boolean(st.win),
-    kills: Number(st.kills) || 0,
-    deaths: Number(st.deaths) || 0,
-    assists: Number(st.assists) || 0,
+    kills,
+    deaths,
+    assists,
     cs: (Number(st.totalMinionsKilled) || 140) + (Number(st.neutralMinionsKilled) || 0),
-    goldEarned: Number(st.goldEarned) || 9500,
-    damageDealt: Number(st.totalDamageDealtToChampions) || 18000,
-    damageTaken: Number(st.totalDamageTaken) || 21000,
+    goldEarned,
+    damageDealt,
+    damageTaken,
     selfMitigatedDamage: Number(st.damageSelfMitigated) || 14000,
     visionScore: Number(st.visionScore) || 22,
     csDiffAt15: st.win ? 8 : -6,
     goldDiffAt15: st.win ? 650 : -520,
-    teamTotalKills: Math.max((Number(st.kills) || 0) + (Number(st.assists) || 0) + 5, 22),
-    teamTotalDeaths: Math.max((Number(st.deaths) || 0) * 4 + 4, 18),
-    teamTotalGold: Math.max((Number(st.goldEarned) || 9500) * 4.5, 42000),
-    enemyTotalGold: st.win ? 40000 : 48000,
-    teamTotalDamage: Math.max((Number(st.totalDamageDealtToChampions) || 18000) * 4.2, 75000),
-    teamTotalDamageTaken: Math.max((Number(st.totalDamageTaken) || 21000) * 4.5, 95000),
+    teamTotalKills: sumStat(teamParts, 'kills', Math.max(kills + assists + 5, 22)),
+    teamTotalDeaths: sumStat(teamParts, 'deaths', Math.max(deaths * 3 + 4, 18)),
+    teamTotalGold: sumStat(teamParts, 'goldEarned', Math.max(goldEarned * 4.5, 42000)),
+    enemyTotalGold: sumStat(enemyParts, 'goldEarned', st.win ? 40000 : 48000),
+    teamTotalDamage: sumStat(
+      teamParts,
+      'totalDamageDealtToChampions',
+      Math.max(damageDealt * 4.2, 75000)
+    ),
+    teamTotalDamageTaken: sumStat(
+      teamParts,
+      'totalDamageTaken',
+      Math.max(damageTaken * 4.5, 95000)
+    ),
     firstBloodKill: Boolean(st.firstBloodKill),
     objectiveStolen: Number(st.objectivesStolen) || 0,
     ccScoreSeconds: Number(st.timeCCingOthers) || 18,
-    coPlayerPuuids: [targetPuuid],
-    enemyPuuids: [],
+    coPlayerPuuids,
+    enemyPuuids,
+    runeTelemetry: extractNativePerkTelemetry(st),
   };
 }
 
@@ -546,13 +623,21 @@ export const tauriNativeEngine = {
           puuids: candidateSlots.map((c) => c.puuid),
         }).catch(() => ({} as Record<string, any>));
 
-        const updatedProfiles = [...nativeScoutProfiles];
-        for (let i = 0; i < Math.min(candidateSlots.length, updatedProfiles.length); i++) {
+        const templateFallback = buildHydratedScoutProfiles(nativeBlacklist)[0];
+        const liveProfiles: SummonerScoutProfile[] = [];
+
+        for (let i = 0; i < candidateSlots.length; i++) {
           const slot = candidateSlots[i];
-          const mh = await tauriInvoke<any>('lcu_raw_request_cmd', {
-            method: 'GET',
-            endpoint: `/lol-match-history/v1/products/lol/${slot.puuid}/matches?begIndex=0&endIndex=8`,
-          }).catch(() => sgpMap[slot.puuid] ?? null);
+          const [mh, rankedRes] = await Promise.all([
+            tauriInvoke<any>('lcu_raw_request_cmd', {
+              method: 'GET',
+              endpoint: `/lol-match-history/v1/products/lol/${slot.puuid}/matches?begIndex=0&endIndex=14`,
+            }).catch(() => sgpMap[slot.puuid] ?? null),
+            tauriInvoke<any>('lcu_raw_request_cmd', {
+              method: 'GET',
+              endpoint: `/lol-ranked/v1/ranked-stats/${slot.puuid}`,
+            }).catch(() => null),
+          ]);
 
           const games = Array.isArray(mh?.games?.games)
             ? mh.games.games
@@ -560,11 +645,11 @@ export const tauriNativeEngine = {
               ? mh.games
               : [];
           const parsedMatches: PlayerMatchStats[] = games
-            .map((g: any) => mapRawLcuMatchSafe(g, slot.puuid))
+            .map((g: any) => mapLcuMatchToPlayerStats(g, slot.puuid, slot.role))
             .filter((m: PlayerMatchStats | null): m is PlayerMatchStats => Boolean(m));
 
           const matchesToUse =
-            parsedMatches.length > 0 ? parsedMatches : updatedProfiles[i].recentMatches;
+            parsedMatches.length > 0 ? parsedMatches : templateFallback.recentMatches;
           const breakdowns = matchesToUse.map((m) => calculateContextAwareRpi(m));
           const avgRpi = Number(
             (
@@ -572,10 +657,13 @@ export const tauriNativeEngine = {
               Math.max(1, breakdowns.length)
             ).toFixed(1)
           );
+
+          const soloQueue = rankedRes?.queueMap?.RANKED_SOLO_5x5;
           const champId = slot.championId || matchesToUse[0]?.championId || 203;
           const champMeta = FULL_CHAMPION_CATALOG[champId];
+
           const profile: SummonerScoutProfile = {
-            ...updatedProfiles[i],
+            ...templateFallback,
             puuid: slot.puuid,
             gameName: slot.gameName,
             tagLine: slot.tagLine,
@@ -583,24 +671,40 @@ export const tauriNativeEngine = {
             assignedRole: slot.role,
             currentChampionId: champId,
             currentChampionName: champMeta?.name || matchesToUse[0]?.championName || '千珏',
+            intendedChampionId: champId,
+            intendedChampionName: champMeta?.name || '千珏',
             championDamageType: champMeta?.damageType || DamageType.PHYSICAL,
+            frontlineRating: champMeta?.frontline ?? 5,
+            ccRating: champMeta?.cc ?? 5,
+            waveclearRating: champMeta?.waveclear ?? 6,
+            lateScalingRating: champMeta?.scaling ?? 7,
+            soloTier: soloQueue?.tier || 'DIAMOND',
+            soloDivision: soloQueue?.division || 'I',
+            soloLp: Number(soloQueue?.leaguePoints ?? 60),
+            soloWins: Number(soloQueue?.wins ?? 50),
+            soloLosses: Number(soloQueue?.losses ?? 45),
             recentMatches: matchesToUse,
             averageRpi: avgRpi,
-            latestRpiBreakdown: breakdowns[0] ?? updatedProfiles[i].latestRpiBreakdown,
+            latestRpiBreakdown: breakdowns[0] ?? templateFallback.latestRpiBreakdown,
+            perkTelemetry: matchesToUse[0]?.runeTelemetry,
+            isAnonymousInBp:
+              slot.teamSide === 'ENEMY' &&
+              nativeStatus.gameflowPhase === GameflowPhase.CHAMP_SELECT,
           };
+
           const blacklistHit = nativeBlacklist.find((b) => b.puuid === profile.puuid);
           profile.tags = evaluateSummonerTags(
             profile.recentMatches,
-            profile.premadeGroupId,
+            undefined,
             blacklistHit
           );
-          updatedProfiles[i] = profile;
+          liveProfiles.push(profile);
         }
 
-        const premadeRes = detectPremadeSquads(updatedProfiles);
+        const premadeRes = detectPremadeSquads(liveProfiles);
         for (const group of premadeRes.premadeGroups) {
           for (const memberPuuid of group.memberPuuids) {
-            const target = updatedProfiles.find((p) => p.puuid === memberPuuid);
+            const target = liveProfiles.find((p) => p.puuid === memberPuuid);
             if (target) {
               target.premadeGroupId = group.groupId;
               target.tags = evaluateSummonerTags(
@@ -611,7 +715,7 @@ export const tauriNativeEngine = {
             }
           }
         }
-        nativeScoutProfiles = updatedProfiles;
+        nativeScoutProfiles = liveProfiles;
       }
 
       return {
@@ -790,14 +894,20 @@ export const tauriNativeEngine = {
         endpoint: '/lol-chat/v1/conversations',
       }).catch(() => []);
       const csConv = Array.isArray(convs)
-        ? convs.find((c) => c?.type === 'championSelect')
+        ? convs.find(
+            (c) =>
+              c?.type === 'championSelect' || String(c?.id || '').includes('champ-select')
+          )
         : null;
       if (csConv?.id) {
-        for (const body of lines) {
+        for (let i = 0; i < lines.length; i++) {
+          if (i > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 350));
+          }
           await tauriInvoke('lcu_raw_request_cmd', {
             method: 'POST',
-            endpoint: `/lol-chat/v1/conversations/${csConv.id}/messages`,
-            body: { body, type: 'chat' },
+            endpoint: `/lol-chat/v1/conversations/${encodeURIComponent(String(csConv.id))}/messages`,
+            body: { body: lines[i], type: 'chat' },
           }).catch(() => null);
           delivered += 1;
         }

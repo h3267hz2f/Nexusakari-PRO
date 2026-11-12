@@ -211,12 +211,11 @@ async fn external_http_get_cmd(
     bearer_token: Option<String>,
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(7))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let mut req = client
+    let mut req = state
+        .lcu_client
+        .inner_client()
         .get(&url)
+        .timeout(Duration::from_secs(7))
         .header(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NexusAkariPro/4.0",
@@ -446,13 +445,50 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let _ = st.probe_lcu_rcu_credentials().await;
                 let _watchdog = st.start_background_watchdog();
+
+                let (wamp_tx, mut wamp_rx) = tokio::sync::broadcast::channel(128);
+                let st_wamp_runner = Arc::clone(&st);
+
+                // <5ms real-time WAMP v1.0 event-driven automation responder
+                tauri::async_runtime::spawn(async move {
+                    while let Ok(ev) = wamp_rx.recv().await {
+                        if ev.uri == "/lol-champ-select/v1/session" {
+                            let _ = st_wamp_runner.execute_champ_select_tick().await;
+                        } else if ev.uri == "/lol-gameflow/v1/gameflow-phase" {
+                            if let Some(phase_str) = ev.data.as_str() {
+                                let _ = st_wamp_runner.run_lifecycle_automation(phase_str).await;
+                            }
+                        } else if ev.uri == "/lol-matchmaking/v1/ready-check" {
+                            let _ = st_wamp_runner.run_lifecycle_automation("ReadyCheck").await;
+                        }
+                    }
+                });
+
                 let mut ticker = tokio::time::interval(Duration::from_millis(1500));
                 let mut last_lifecycle_phase = String::new();
+                let mut active_wamp_port: u16 = 0;
+                let mut wamp_kill_tx: Option<tokio::sync::watch::Sender<bool>> = None;
 
                 loop {
                     ticker.tick().await;
                     let creds_opt = st.credentials.read().await.clone();
                     if let Some(ref creds) = creds_opt {
+                        if creds.lcu_port != active_wamp_port {
+                            if let Some(old_tx) = wamp_kill_tx.take() {
+                                let _ = old_tx.send(true);
+                            }
+                            let (kill_tx, kill_rx) = tokio::sync::watch::channel(false);
+                            wamp_kill_tx = Some(kill_tx);
+                            active_wamp_port = creds.lcu_port;
+                            let _wamp_handle =
+                                nexus_akari_pro_lib::lcu_connector::spawn_wamp_subscriber_loop(
+                                    creds.clone(),
+                                    Arc::clone(&st.ring_buffer),
+                                    wamp_tx.clone(),
+                                    kill_rx,
+                                );
+                        }
+
                         let phase_val = st
                             .lcu_client
                             .lcu_request(

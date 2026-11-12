@@ -207,7 +207,7 @@ const COMPACT_CHAMPION_TUPLES: CompactChampTuple[] = [
   [887, '灵罗娃娃', '格温', RoleType.TOP, DamageType.TRUE, 6, 3, 8, 10, 'BRUISER_CONQ'],
   [888, '炼金男爵', '烈娜塔·戈拉斯克', RoleType.SUP, DamageType.MAGIC, 3, 9, 4, 9, 'ENCHANTER'],
   [893, '双界灵兔', '阿萝拉', RoleType.MID, DamageType.MAGIC, 3, 6, 8, 8, 'MAGE_BURST'],
-  [895, '不羁之悦', '尼ilah', RoleType.BOT, DamageType.PHYSICAL, 5, 7, 8, 9, 'BRUISER_CONQ'],
+  [895, '不羁之悦', '尼菈', RoleType.BOT, DamageType.PHYSICAL, 5, 7, 8, 9, 'BRUISER_CONQ'],
   [897, '纳祖芒荣耀', '奎桑提', RoleType.TOP, DamageType.MIXED, 9, 8, 7, 8, 'TANK_GRASP'],
   [901, '炽炎雏龙', '斯莫德', RoleType.BOT, DamageType.TRUE, 2, 3, 9, 10, 'ADC_CASTER'],
   [902, '明烛', '米利欧', RoleType.SUP, DamageType.MAGIC, 2, 6, 3, 9, 'ENCHANTER'],

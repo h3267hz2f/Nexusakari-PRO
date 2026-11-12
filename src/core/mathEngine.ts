@@ -1012,6 +1012,9 @@ const SENSITIVE_SYNONYM_MAP: Array<[RegExp, string]> = [
 ];
 
 export function obfuscateChatLine(raw: string, enableZeroWidth = true): string {
+  if (raw.includes('\u200C') || raw.includes('\u200B')) {
+    return raw;
+  }
   let cleaned = raw;
   for (const [pattern, replacement] of SENSITIVE_SYNONYM_MAP) {
     cleaned = cleaned.replace(pattern, replacement);

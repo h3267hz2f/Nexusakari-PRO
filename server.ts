@@ -435,10 +435,35 @@ function buildDeterministicFallbackJudgeReport(
   };
 }
 
+const ALLOWED_LOCAL_ORIGINS = new Set([
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'tauri://localhost',
+  'http://tauri.localhost',
+  'https://tauri.localhost',
+]);
+
+function isTrustedOrigin(origin: string): boolean {
+  if (ALLOWED_LOCAL_ORIGINS.has(origin)) return true;
+  return origin.endsWith('.run.app') || origin.endsWith('.google.com');
+}
+
 async function startServer() {
   const app = express();
   app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (origin && isTrustedOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    } else if (!origin) {
+      res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3000');
+    } else if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.status(403).json({
+        error: 'Forbidden cross-origin request to local LCU bridge',
+      });
+      return;
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     if (req.method === 'OPTIONS') {
@@ -1390,8 +1415,12 @@ async function startServer() {
   }
 
   const PORT = Number(process.env.PORT || 3000);
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`NexusAkari Pro v4 Isomorphic Bridge & AI Server running at http://localhost:${PORT}`);
+  const HOST =
+    process.env.HOST || (process.platform === 'win32' ? '127.0.0.1' : '0.0.0.0');
+  app.listen(PORT, HOST, () => {
+    console.log(
+      `NexusAkari Pro v4 Isomorphic Bridge & AI Server running at http://${HOST}:${PORT}`
+    );
     void probeAndSyncLiveClient(true);
     void syncExternalLoLDataSources(false);
   });

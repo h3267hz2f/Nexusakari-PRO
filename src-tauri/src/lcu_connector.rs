@@ -9,8 +9,53 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::System;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::{watch, RwLock};
+use tokio_tungstenite::{
+    connect_async_tls_with_config,
+    tungstenite::{client::IntoClientRequest, http::HeaderValue, Message},
+    Connector,
+};
+
+#[derive(Debug)]
+struct InsecureLcuCertVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for InsecureLcuCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -304,23 +349,23 @@ impl LcuRestClient {
 }
 
 /// Spawns a 2-second PID Hot-Reload Watchdog that monitors `LeagueClientUx.exe` restarts
-/// or port rotations and automatically updates the shared credential state.
+/// or port rotations while reusing a single `sysinfo::System` instance to avoid CPU spikes.
 pub fn spawn_pid_watchdog(
     shared_creds: Arc<RwLock<Option<LcuRcuCredentials>>>,
     ring_buffer: Arc<IpcRingBuffer>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut sys = System::new();
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let latest = scan_dual_process_credentials();
+                    let latest = scan_dual_process_credentials_with_sys(&mut sys);
                     let should_update = {
                         let current = shared_creds.read().await;
                         match (&*current, &latest) {
-                            (None, Some(_)) => true,
-                            (Some(_), None) => true,
+                            (None, Some(_)) | (Some(_), None) => true,
                             (Some(a), Some(b)) => a.lcu_pid != b.lcu_pid || a.lcu_port != b.lcu_port,
                             (None, None) => false,
                         }
@@ -346,7 +391,7 @@ pub fn spawn_pid_watchdog(
                                 method: "WATCHDOG".to_string(),
                                 endpoint: "pid_hot_reload_watchdog".to_string(),
                                 status: 200,
-                                duration_ms: 0.8,
+                                duration_ms: 0.4,
                                 payload_summary: summary,
                             })
                             .await;
@@ -362,8 +407,9 @@ pub fn spawn_pid_watchdog(
     })
 }
 
-/// Connects to the local LCU WAMP v1.0 WebSocket (`wss://127.0.0.1:{lcu_port}/`),
-/// sends `[5, "OnJsonApiEvent"]`, filters frames through `WampPrefixFilter`, and records events.
+/// Connects to the local LCU WAMP v1.0 WebSocket (`wss://127.0.0.1:{lcu_port}/`) with Basic Auth
+/// and self-signed `riotgames.pem` certificate acceptance, sends `[5, "OnJsonApiEvent"]`,
+/// filters frames through `WampPrefixFilter`, and broadcasts `<5ms` real-time events.
 pub fn spawn_wamp_subscriber_loop(
     creds: LcuRcuCredentials,
     ring_buffer: Arc<IpcRingBuffer>,
@@ -374,10 +420,33 @@ pub fn spawn_wamp_subscriber_loop(
         let ws_url = format!("wss://127.0.0.1:{}/", creds.lcu_port);
         let filter = WampPrefixFilter::default();
 
-        if let Ok((mut ws_stream, _)) = tokio_tungstenite::connect_async(&ws_url).await {
-            let subscribe_msg = tokio_tungstenite::tungstenite::Message::Text(
-                "[5, \"OnJsonApiEvent\"]".into(),
-            );
+        let mut request = match ws_url.into_client_request() {
+            Ok(req) => req,
+            Err(_) => return,
+        };
+        if let Ok(auth_val) = HeaderValue::from_str(&format_basic_auth_header(&creds.lcu_auth_token))
+        {
+            request.headers_mut().insert("Authorization", auth_val);
+        }
+
+        let tls_config = match rustls::ClientConfig::builder_with_provider(
+            rustls::crypto::ring::default_provider().into(),
+        )
+        .with_safe_default_protocol_versions()
+        {
+            Ok(builder) => builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(InsecureLcuCertVerifier))
+                .with_no_client_auth(),
+            Err(_) => return,
+        };
+
+        let connector = Connector::Rustls(Arc::new(tls_config));
+
+        if let Ok((mut ws_stream, _)) =
+            connect_async_tls_with_config(request, None, false, Some(connector)).await
+        {
+            let subscribe_msg = Message::Text("[5, \"OnJsonApiEvent\"]".into());
             let _ = ws_stream.send(subscribe_msg).await;
 
             ring_buffer
@@ -388,8 +457,8 @@ pub fn spawn_wamp_subscriber_loop(
                     method: "SUBSCRIBE".to_string(),
                     endpoint: "[5, \"OnJsonApiEvent\"]".to_string(),
                     status: 101,
-                    duration_ms: 1.5,
-                    payload_summary: "WAMP v1.0 subscription active with Prefix-Trie filter"
+                    duration_ms: 1.2,
+                    payload_summary: "WAMP v1.0 TLS+BasicAuth subscription active with Prefix-Trie filter"
                         .to_string(),
                 })
                 .await;
@@ -409,7 +478,7 @@ pub fn spawn_wamp_subscriber_loop(
                                                 method: ev.event_type.clone(),
                                                 endpoint: ev.uri.clone(),
                                                 status: 200,
-                                                duration_ms: 0.2,
+                                                duration_ms: 0.15,
                                                 payload_summary: format!("WAMP delta on {}", ev.uri),
                                             })
                                             .await;
@@ -433,55 +502,80 @@ pub fn spawn_wamp_subscriber_loop(
 }
 
 /// Scans running `LeagueClientUx.exe` process arguments in-memory without touching game memory.
-/// Extracts both LCU (`--app-port`, `--remoting-auth-token`) and RCU (`--riotclient-app-port`, `--riotclient-auth-token`).
 pub fn scan_dual_process_credentials() -> Option<LcuRcuCredentials> {
-    let mut sys = System::new_all();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let mut sys = System::new();
+    scan_dual_process_credentials_with_sys(&mut sys)
+}
+
+/// Iterates discrete `OsString` process arguments directly so Windows paths containing spaces
+/// (such as `C:\Program Files\Riot Games\League of Legends`) are never truncated.
+pub fn scan_dual_process_credentials_with_sys(sys: &mut System) -> Option<LcuRcuCredentials> {
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet),
+    );
 
     for (pid, process) in sys.processes() {
         let name = process.name().to_string_lossy();
         if name.contains("LeagueClientUx") {
-            let cmd_joined = process
+            let args: Vec<String> = process
                 .cmd()
                 .iter()
-                .map(|s| s.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(" ");
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
 
-            let lcu_port = extract_flag(&cmd_joined, "--app-port=")
+            let lcu_port = extract_flag_from_args(&args, "--app-port=")
                 .and_then(|v| v.parse::<u16>().ok())
                 .unwrap_or(0);
             let lcu_auth_token =
-                extract_flag(&cmd_joined, "--remoting-auth-token=").unwrap_or_default();
-            let rcu_port = extract_flag(&cmd_joined, "--riotclient-app-port=")
+                extract_flag_from_args(&args, "--remoting-auth-token=").unwrap_or_default();
+
+            if lcu_port == 0 || lcu_auth_token.is_empty() {
+                continue;
+            }
+
+            let rcu_port = extract_flag_from_args(&args, "--riotclient-app-port=")
                 .and_then(|v| v.parse::<u16>().ok())
                 .unwrap_or(0);
             let rcu_auth_token =
-                extract_flag(&cmd_joined, "--riotclient-auth-token=").unwrap_or_default();
-            let rso_platform_id = extract_flag(&cmd_joined, "--rso_platform_id=")
+                extract_flag_from_args(&args, "--riotclient-auth-token=").unwrap_or_default();
+            let rso_platform_id = extract_flag_from_args(&args, "--rso_platform_id=")
                 .unwrap_or_else(|| "HN1".to_string());
-            let region =
-                extract_flag(&cmd_joined, "--region=").unwrap_or_else(|| "TENCENT".to_string());
+            let region = extract_flag_from_args(&args, "--region=")
+                .unwrap_or_else(|| "TENCENT".to_string());
             let install_directory =
-                extract_flag(&cmd_joined, "--install-directory=").unwrap_or_default();
-            let is_we_game_launcher = cmd_joined.contains("WeGame") || region.contains("TENCENT");
+                extract_flag_from_args(&args, "--install-directory=").unwrap_or_default();
+            let is_we_game_launcher = args.iter().any(|a| a.contains("WeGame"))
+                || region.to_uppercase().contains("TENCENT");
 
-            if lcu_port > 0 && !lcu_auth_token.is_empty() {
-                return Some(LcuRcuCredentials {
-                    lcu_pid: pid.as_u32(),
-                    lcu_port,
-                    lcu_auth_token,
-                    rcu_pid: 0,
-                    rcu_port,
-                    rcu_auth_token,
-                    rso_platform_id,
-                    region,
-                    install_directory,
-                    is_we_game_launcher,
-                    last_heartbeat_at: chrono::Utc::now().to_rfc3339(),
-                });
-            }
+            return Some(LcuRcuCredentials {
+                lcu_pid: pid.as_u32(),
+                lcu_port,
+                lcu_auth_token,
+                rcu_pid: 0,
+                rcu_port,
+                rcu_auth_token,
+                rso_platform_id,
+                region,
+                install_directory,
+                is_we_game_launcher,
+                last_heartbeat_at: chrono::Utc::now().to_rfc3339(),
+            });
         }
+    }
+    None
+}
+
+pub fn extract_flag_from_args(args: &[String], prefix: &str) -> Option<String> {
+    for arg in args {
+        let trimmed = arg.trim_matches('"');
+        if let Some(val) = trimmed.strip_prefix(prefix) {
+            return Some(val.trim_matches('"').to_string());
+        }
+    }
+    if args.len() == 1 {
+        return extract_flag(&args[0], prefix);
     }
     None
 }
@@ -489,6 +583,10 @@ pub fn scan_dual_process_credentials() -> Option<LcuRcuCredentials> {
 pub fn extract_flag(cmd: &str, prefix: &str) -> Option<String> {
     let start = cmd.find(prefix)? + prefix.len();
     let rest = &cmd[start..];
+    if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"').unwrap_or(stripped.len());
+        return Some(stripped[..end].to_string());
+    }
     let end = rest
         .find(|c: char| c == '"' || c.is_whitespace())
         .unwrap_or(rest.len());

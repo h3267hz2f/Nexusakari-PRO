@@ -107,6 +107,7 @@ impl AppKernelState {
     }
 
     /// 6. Hot-injects a complete 9-perk Rune Page into LCU (`/lol-perks/v1/currentpage` + `/lol-perks/v1/pages`)
+    /// with fallback slot eviction when the active page is a non-deletable system preset and custom slots are full.
     pub async fn inject_lcu_rune_page(
         &self,
         page_name: &str,
@@ -121,6 +122,8 @@ impl AppKernelState {
             .clone()
             .ok_or_else(|| "LCU not connected".to_string())?;
 
+        let mut deleted_any = false;
+
         if let Ok(curr) = self
             .lcu_client
             .lcu_request(
@@ -132,17 +135,70 @@ impl AppKernelState {
             )
             .await
         {
-            if let Some(page_id) = curr.get("id").and_then(|v| v.as_i64()) {
-                let _ = self
-                    .lcu_client
-                    .lcu_request(
-                        &creds,
-                        Method::DELETE,
-                        &format!("/lol-perks/v1/pages/{}", page_id),
-                        None,
-                        &self.ring_buffer,
-                    )
-                    .await;
+            let is_deletable = curr
+                .get("isDeletable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_deletable {
+                if let Some(page_id) = curr.get("id").and_then(|v| v.as_i64()) {
+                    deleted_any = self
+                        .lcu_client
+                        .lcu_request(
+                            &creds,
+                            Method::DELETE,
+                            &format!("/lol-perks/v1/pages/{}", page_id),
+                            None,
+                            &self.ring_buffer,
+                        )
+                        .await
+                        .is_ok();
+                }
+            }
+        }
+
+        if !deleted_any {
+            if let Ok(pages_val) = self
+                .lcu_client
+                .lcu_request(
+                    &creds,
+                    Method::GET,
+                    "/lol-perks/v1/pages",
+                    None,
+                    &self.ring_buffer,
+                )
+                .await
+            {
+                if let Some(pages) = pages_val.as_array() {
+                    let target_page = pages
+                        .iter()
+                        .find(|p| {
+                            p.get("isDeletable").and_then(|v| v.as_bool()) == Some(true)
+                                && p.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|n| n.contains("NexusAkari") || n.contains("OP.GG"))
+                                    .unwrap_or(false)
+                        })
+                        .or_else(|| {
+                            pages.iter().find(|p| {
+                                p.get("isDeletable").and_then(|v| v.as_bool()) == Some(true)
+                            })
+                        });
+
+                    if let Some(page_id) =
+                        target_page.and_then(|p| p.get("id")).and_then(|v| v.as_i64())
+                    {
+                        let _ = self
+                            .lcu_client
+                            .lcu_request(
+                                &creds,
+                                Method::DELETE,
+                                &format!("/lol-perks/v1/pages/{}", page_id),
+                                None,
+                                &self.ring_buffer,
+                            )
+                            .await;
+                    }
+                }
             }
         }
 
