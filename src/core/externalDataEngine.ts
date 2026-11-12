@@ -1023,8 +1023,11 @@ export async function fetchExternalChampionBuild(
         pickRate: Number((sp.pick_rate || 0).toFixed(4)),
         playCount: sp.play,
       })),
-      strongAgainst: countersSorted.slice(0, 4),
-      weakAgainst: [...countersSorted].reverse().slice(0, 4),
+      strongAgainst: countersSorted.filter((c) => c.myWinRate >= 0.5).slice(0, 4),
+      weakAgainst: [...countersSorted]
+        .filter((c) => c.myWinRate < 0.5)
+        .reverse()
+        .slice(0, 4),
     };
 
     state.championBuildCache[cacheKey] = detail;

@@ -410,3 +410,138 @@ test('Slice-1.8: 4-Source External Live LoL API Engine (OP.GG Ranked/ARAM, Riot 
   assert.ok(aatroxBuild.detail.runeBuilds.length >= 1);
   assert.equal(aatroxBuild.detail.runeBuilds[0].selectedPerkIds.length, 9);
 });
+
+test('Slice-1.9: 2nd-Round Deep Audit Fixes (ChampSelect Floor vs Role, 4AD+1TankSup Skew, 1-Min Throw Window, Red-Side Timeline Perspective & Dodge EV Sign)', async () => {
+  const { resolveLcuPositionToRole, mapRawTimelineToMinutePoints } = await import(
+    './liveLcuAdapter'
+  );
+
+  // 1. ChampSelect assignedPosition & MatchHistory lane+role resolution
+  assert.equal(resolveLcuPositionToRole('utility', undefined, undefined, 412, 0), RoleType.SUP);
+  assert.equal(resolveLcuPositionToRole('', 'BOTTOM', 'DUO_SUPPORT', 412, 0), RoleType.SUP);
+  assert.equal(resolveLcuPositionToRole('', 'BOTTOM', 'DUO_CARRY', 222, 4), RoleType.BOT);
+  assert.equal(resolveLcuPositionToRole('jungle', undefined, undefined, 64, 3), RoleType.JGL);
+
+  // 2. 4 AD Cores (TOP/JGL/MID/BOT) + 1 Magic Tank Support (Nautilus SUP) MUST trigger All-AD Skew Warning
+  const profiles = buildHydratedScoutProfiles();
+  const allies = profiles.filter((p) => p.teamSide === 'ALLY');
+  const fourAdPlusMagicSup = allies.map((p) => ({
+    ...p,
+    championDamageType:
+      p.assignedRole === RoleType.SUP ? DamageType.MAGIC : DamageType.PHYSICAL,
+  }));
+  const comp4Ad1Sup = diagnoseTeamComposition(fourAdPlusMagicSup);
+  assert.ok(
+    comp4Ad1Sup.physicalRatio >= 0.76,
+    `Expected 4AD+1MagicSup physicalRatio >= 0.76, got ${comp4Ad1Sup.physicalRatio}`
+  );
+  assert.equal(comp4Ad1Sup.isSkewed, true);
+  assert.ok(comp4Ad1Sup.skewWarning?.includes('纯菜刀队'));
+
+  // 3. 1-Minute Timeline Resolution still detects 2-minute cumulative throw swings
+  const oneMinTimeline = [
+    {
+      minute: 18,
+      blueGold: 36000,
+      redGold: 30000,
+      blueKills: 15,
+      redKills: 7,
+      blueDragons: 2,
+      redDragons: 0,
+      blueBarons: 0,
+      redBarons: 0,
+      blueTowers: 5,
+      redTowers: 1,
+      eventSummary: '18:00 蓝方大优',
+    },
+    {
+      minute: 19,
+      blueGold: 36500,
+      redGold: 33200,
+      blueKills: 15,
+      redKills: 10,
+      blueDragons: 2,
+      redDragons: 0,
+      blueBarons: 0,
+      redBarons: 0,
+      blueTowers: 5,
+      redTowers: 2,
+      eventSummary: '19:00 河道小规模被抓',
+    },
+    {
+      minute: 20,
+      blueGold: 37000,
+      redGold: 38500,
+      blueKills: 15,
+      redKills: 14,
+      blueDragons: 2,
+      redDragons: 1,
+      blueBarons: 0,
+      redBarons: 1,
+      blueTowers: 5,
+      redTowers: 4,
+      eventSummary: '20:00 大龙团溃败',
+    },
+  ];
+  const oneMinAnalysis = analyzeWinProbabilityAndThrows(oneMinTimeline);
+  assert.ok(
+    oneMinAnalysis.throwPoints.length >= 1,
+    'Expected 1-minute resolution timeline to detect 2-minute cumulative throw swing'
+  );
+
+  // 4. Red-Side Perspective flips participant 1..5 and 6..10 in mapRawTimelineToMinutePoints
+  const rawTl = {
+    frames: [
+      {
+        timestamp: 600_000,
+        participantFrames: {
+          '1': { participantId: 1, totalGold: 3000 },
+          '6': { participantId: 6, totalGold: 5200 },
+        },
+        events: [{ type: 'ELITE_MONSTER_KILL', monsterType: 'DRAGON', killerId: 6 }],
+      },
+    ],
+  };
+  const bluePerspective = mapRawTimelineToMinutePoints(rawTl, {}, false);
+  const redPerspective = mapRawTimelineToMinutePoints(rawTl, {}, true);
+  assert.equal(bluePerspective[0].blueGold, 3000);
+  assert.equal(bluePerspective[0].redGold, 5200);
+  assert.equal(redPerspective[0].blueGold, 5200);
+  assert.equal(redPerspective[0].redGold, 3000);
+  assert.equal(redPerspective[0].blueDragons, 1);
+
+  // 5. Healthy team Dodge EV wording vs Blacklist Dodge with negative netLpAdvantageOfDodging
+  const healthyAllies = allies.map((p) => ({
+    ...p,
+    puuid: `clean-${p.puuid}`,
+    averageRpi: 82,
+    tags: [],
+  }));
+  const healthyComp = diagnoseTeamComposition(healthyAllies);
+  const healthyEv = calculateDodgeExpectedValue(healthyAllies, healthyComp, [], 0);
+  assert.equal(healthyEv.shouldDodge, false);
+  assert.ok(healthyEv.headlineVerdict.includes('建议正常对局 (Play)'));
+
+  const blacklistDodgeWithHighTeamRpi = calculateDodgeExpectedValue(
+    healthyAllies,
+    healthyComp,
+    [
+      {
+        ...INITIAL_BLACKLIST_LEDGER[0],
+        puuid: `clean-${allies[0].puuid}`,
+        gameName: allies[0].gameName,
+        tagLine: allies[0].tagLine,
+        listType: 'BLACKLIST_DODGE',
+      },
+    ],
+    0
+  );
+  assert.equal(blacklistDodgeWithHighTeamRpi.shouldDodge, true);
+  assert.ok(blacklistDodgeWithHighTeamRpi.netLpAdvantageOfDodging < 0);
+  assert.ok(
+    blacklistDodgeWithHighTeamRpi.headlineVerdict.includes('虽表面多付') &&
+      !blacklistDodgeWithHighTeamRpi.headlineVerdict.includes('少亏'),
+    'Negative netLpAdvantageOfDodging must not claim 少亏'
+  );
+});
+

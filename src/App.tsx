@@ -435,7 +435,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'client-toolkit' && (
+          <div className={activeTab === 'client-toolkit' ? 'block' : 'hidden'}>
             <ClientToolkitWorkspace
               scoutProfiles={scoutProfiles}
               lootShards={lootShards}
@@ -447,7 +447,7 @@ export function App() {
               onQuerySpectatorSession={handleQuerySpectatorSession}
               onLaunchLocalSpectator={handleLaunchLocalSpectator}
             />
-          )}
+          </div>
 
           {activeTab === 'tauri-kernel' && (
             <TauriKernelInspector status={status} ringBuffer={ringBuffer} />

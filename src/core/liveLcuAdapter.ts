@@ -790,6 +790,49 @@ export function extractPerkTelemetryFromRawGame(
 }
 
 /**
+ * Resolves LCU ChampSelect `assignedPosition` or MatchHistory `timeline.lane` + `timeline.role`
+ * into an accurate `RoleType` instead of relying on cellId 1..5 floor index.
+ */
+export function resolveLcuPositionToRole(
+  assignedPosition?: string,
+  timelineLane?: string,
+  timelineRole?: string,
+  fallbackChampId?: number,
+  fallbackIndex = 0
+): RoleType {
+  const pos = String(assignedPosition || '').toUpperCase().trim();
+  if (pos === 'TOP') return RoleType.TOP;
+  if (pos === 'JUNGLE' || pos === 'JGL') return RoleType.JGL;
+  if (pos === 'MIDDLE' || pos === 'MID') return RoleType.MID;
+  if (pos === 'BOTTOM' || pos === 'BOT' || pos === 'ADC') return RoleType.BOT;
+  if (pos === 'UTILITY' || pos === 'SUPPORT' || pos === 'SUP') return RoleType.SUP;
+
+  const lane = String(timelineLane || '').toUpperCase().trim();
+  const role = String(timelineRole || '').toUpperCase().trim();
+  if (lane === 'TOP') return RoleType.TOP;
+  if (lane === 'JUNGLE') return RoleType.JGL;
+  if (lane === 'MIDDLE' || lane === 'MID') return RoleType.MID;
+  if (lane === 'BOTTOM' || lane === 'BOT') {
+    return role.includes('SUPPORT') ? RoleType.SUP : RoleType.BOT;
+  }
+  if (role === 'DUO_SUPPORT' || role === 'SUPPORT') return RoleType.SUP;
+  if (role === 'DUO_CARRY') return RoleType.BOT;
+
+  if (fallbackChampId && FULL_CHAMPION_CATALOG[fallbackChampId]) {
+    return FULL_CHAMPION_CATALOG[fallbackChampId].primaryRole;
+  }
+
+  const roleOrder = [
+    RoleType.TOP,
+    RoleType.JGL,
+    RoleType.MID,
+    RoleType.BOT,
+    RoleType.SUP,
+  ];
+  return roleOrder[fallbackIndex % 5];
+}
+
+/**
  * Converts Riot's raw LCU `/lol-match-history/v1/products/lol/{puuid}/matches` games array
  * into `PlayerMatchStats[]` for our v4 RPI and Premade Union-Find engine.
  */
@@ -878,6 +921,15 @@ export function mapRawLcuGamesToMatchStats(
 
     const champId = Number(selfPart.championId ?? 203);
     const champMeta = getChampionMeta(champId);
+    const resolvedMatchRole = resolveLcuPositionToRole(
+      selfPart.teamPosition || selfPart.individualPosition || stats.playerPosition,
+      selfPart.timeline?.lane || selfPart.lane,
+      selfPart.timeline?.role || selfPart.role,
+      champId,
+      [RoleType.TOP, RoleType.JGL, RoleType.MID, RoleType.BOT, RoleType.SUP].indexOf(
+        fallbackRole
+      )
+    );
 
     results.push({
       matchId: String(game.gameId ?? `LCU-${Date.now()}`),
@@ -888,7 +940,7 @@ export function mapRawLcuGamesToMatchStats(
       championId: champId,
       championName: champMeta.name,
       championTitle: champMeta.title,
-      role: fallbackRole,
+      role: resolvedMatchRole,
       win: Boolean(stats.win),
       kills,
       deaths,
@@ -922,13 +974,21 @@ export function mapRawLcuGamesToMatchStats(
 /**
  * Converts Riot's `/lol-match-history/v1/games/{gameId}/timeline` frames into `TimelineMinutePoint[]`
  * so the 30-Minute Win-Probability P(Win|t) Curve and Throw-Point Detector work on real games.
+ * When `isRedSidePerspective` is true (player is on Team 200 / participantId 6..10), normalizes
+ * `blue*` fields to represent the player's own team and `red*` to represent the opposing team.
  */
 export function mapRawTimelineToMinutePoints(
   rawTimeline: any,
-  participantNameMap: Record<number, { name: string; puuid: string }> = {}
+  participantNameMap: Record<number, { name: string; puuid: string }> = {},
+  isRedSidePerspective = false
 ): TimelineMinutePoint[] {
   const frames: any[] = Array.isArray(rawTimeline?.frames) ? rawTimeline.frames : [];
   if (frames.length === 0) return [];
+
+  const isAllyPid = (pid: number) =>
+    isRedSidePerspective ? pid >= 6 && pid <= 10 : pid >= 1 && pid <= 5;
+  const isEnemyPid = (pid: number) =>
+    isRedSidePerspective ? pid >= 1 && pid <= 5 : pid >= 6 && pid <= 10;
 
   const points: TimelineMinutePoint[] = [];
   let blueKills = 0;
@@ -951,9 +1011,9 @@ export function mapRawTimelineToMinutePoints(
     for (const pf of Object.values(pFrames) as any[]) {
       const pid = Number(pf?.participantId ?? 0);
       const gold = Number(pf?.totalGold ?? 0);
-      if (pid >= 1 && pid <= 5) {
+      if (isAllyPid(pid)) {
         blueGold += gold;
-      } else if (pid >= 6 && pid <= 10) {
+      } else if (isEnemyPid(pid)) {
         redGold += gold;
       }
     }
@@ -966,28 +1026,34 @@ export function mapRawTimelineToMinutePoints(
     for (const ev of events) {
       if (ev.type === 'ELITE_MONSTER_KILL') {
         const killerId = Number(ev.killerId ?? 1);
-        const isBlue = killerId >= 1 && killerId <= 5;
+        const isAlly = isAllyPid(killerId);
         if (ev.monsterType === 'BARON_NASHOR') {
-          if (isBlue) blueBarons++;
+          if (isAlly) blueBarons++;
           else redBarons++;
-          eventSummary = `${isBlue ? '我方' : '敌方'}控下纳什男爵 (Baron Nashor)`;
+          eventSummary = `${isAlly ? '我方' : '敌方'}控下纳什男爵 (Baron Nashor)`;
         } else if (ev.monsterType === 'DRAGON') {
-          if (isBlue) blueDragons++;
+          if (isAlly) blueDragons++;
           else redDragons++;
-          eventSummary = `${isBlue ? '我方' : '敌方'}控下元素亚龙`;
+          eventSummary = `${isAlly ? '我方' : '敌方'}控下元素亚龙`;
         }
       } else if (ev.type === 'BUILDING_KILL') {
         const killerId = Number(ev.killerId ?? 0);
-        const teamId = Number(ev.teamId ?? (killerId >= 1 && killerId <= 5 ? 200 : 100));
-        if (teamId === 200) blueTowers++;
+        // In Riot timeline, ev.teamId is the team whose building was destroyed (100 = Blue building lost, 200 = Red building lost)
+        const destroyedTeamId = Number(
+          ev.teamId ?? (killerId >= 1 && killerId <= 5 ? 200 : 100)
+        );
+        const allyScoredTower = isRedSidePerspective
+          ? destroyedTeamId === 100
+          : destroyedTeamId === 200;
+        if (allyScoredTower) blueTowers++;
         else redTowers++;
       } else if (ev.type === 'CHAMPION_KILL') {
         const killerId = Number(ev.killerId ?? 0);
-        if (killerId >= 1 && killerId <= 5) blueKills++;
-        else if (killerId >= 6 && killerId <= 10) redKills++;
+        if (isAllyPid(killerId)) blueKills++;
+        else if (isEnemyPid(killerId)) redKills++;
 
         const victimId = Number(ev.victimId ?? 0);
-        if (!eventSummary && victimId >= 1 && victimId <= 5 && minute >= 18) {
+        if (!eventSummary && isAllyPid(victimId) && minute >= 18) {
           const victimInfo = participantNameMap[victimId];
           involvedPlayerName = victimInfo?.name ?? `选手 #${victimId}`;
           eventSummary = `${involvedPlayerName} 在中后期关键时间点阵亡`;
@@ -1532,16 +1598,38 @@ export async function executeLiveAutomationTick(
         }
       }
 
-      // Iterate action groups for active Ban / Pick turn
+      // Iterate action groups: Pass 1 collects all completed/in-progress unavailable champion IDs across all cells
       const actionGroups: any[][] = Array.isArray(session.actions)
         ? session.actions
         : [];
       for (const group of actionGroups) {
         if (!Array.isArray(group)) continue;
         for (const act of group) {
-          if (Number(act?.characterId || act?.championId) > 0 && act?.completed) {
-            unavailableIds.add(Number(act.championId));
+          const cid = Number(act?.characterId || act?.championId || 0);
+          if (cid > 0 && (act?.completed === true || Number(act?.actorCellId) !== localCellId)) {
+            unavailableIds.add(cid);
           }
+        }
+      }
+
+      // Query owned/pickable champion IDs so unowned primary picks seamlessly fall back to backups
+      const pickableRes = await callLiveLcuEndpoint<number[]>(
+        creds,
+        'GET',
+        '/lol-champ-select/v1/pickable-champion-ids',
+        undefined,
+        onEnvelope
+      ).catch(() => null);
+      const pickableSet = new Set<number>(
+        Array.isArray(pickableRes?.data)
+          ? pickableRes.data.map((id) => Number(id)).filter((id) => id > 0)
+          : []
+      );
+
+      // Pass 2: Execute active Ban / Pick turns with sequential fallback loop on PATCH failure
+      for (const group of actionGroups) {
+        if (!Array.isArray(group)) continue;
+        for (const act of group) {
           if (
             Number(act?.actorCellId) === localCellId &&
             act?.isInProgress === true &&
@@ -1551,6 +1639,7 @@ export async function executeLiveAutomationTick(
             const actionType = String(act.type ?? '');
 
             if (actionType === 'ban' && config.autoBanEnabled) {
+              const validBanCandidates: number[] = [];
               for (const candId of config.banChampionIds) {
                 if (
                   config.protectTeammateIntentGuard &&
@@ -1560,35 +1649,35 @@ export async function executeLiveAutomationTick(
                   continue;
                 }
                 if (unavailableIds.has(candId)) continue;
-                lockedBanChampionId = candId;
-                break;
+                validBanCandidates.push(candId);
               }
-              if (lockedBanChampionId) {
+              for (const candId of validBanCandidates) {
                 const banRes = await callLiveLcuEndpoint(
                   creds,
                   'PATCH',
                   `/lol-champ-select/v1/session/actions/${actionId}`,
-                  { championId: lockedBanChampionId, completed: true },
+                  { championId: candId, completed: true },
                   onEnvelope
                 ).catch(() => null);
                 if (banRes?.ok) {
+                  lockedBanChampionId = candId;
+                  unavailableIds.add(candId);
                   executedActions.push(
-                    `[真机SafeBan] 已执行 PATCH /lol-champ-select/v1/session/actions/${actionId} 禁用 ${getChampionMeta(lockedBanChampionId).name}`
+                    `[真机SafeBan] 已执行 PATCH /lol-champ-select/v1/session/actions/${actionId} 禁用 ${getChampionMeta(candId).name}`
                   );
+                  break;
                 }
               }
             } else if (actionType === 'pick' && config.autoPickEnabled) {
               const allPickCandidates = [
                 ...config.primaryPickChampionIds,
                 ...config.backupPickChampionIds,
-              ];
-              for (const candId of allPickCandidates) {
-                if (!unavailableIds.has(candId)) {
-                  lockedPickChampionId = candId;
-                  break;
-                }
-              }
-              if (lockedPickChampionId) {
+              ].filter(
+                (candId) =>
+                  !unavailableIds.has(candId) &&
+                  (pickableSet.size === 0 || pickableSet.has(candId))
+              );
+              if (allPickCandidates.length > 0) {
                 const jitter = Math.round(
                   config.humanizedJitterMinMs +
                     Math.random() *
@@ -1598,17 +1687,22 @@ export async function executeLiveAutomationTick(
                       )
                 );
                 await new Promise((r) => setTimeout(r, Math.min(jitter, 800)));
-                const pickRes = await callLiveLcuEndpoint(
-                  creds,
-                  'PATCH',
-                  `/lol-champ-select/v1/session/actions/${actionId}`,
-                  { championId: lockedPickChampionId, completed: true },
-                  onEnvelope
-                ).catch(() => null);
-                if (pickRes?.ok) {
-                  executedActions.push(
-                    `[真机AutoPick] 拟人抖动 +${jitter}ms 后锁定主选英雄 ${getChampionMeta(lockedPickChampionId).name}`
-                  );
+                for (const candId of allPickCandidates) {
+                  const pickRes = await callLiveLcuEndpoint(
+                    creds,
+                    'PATCH',
+                    `/lol-champ-select/v1/session/actions/${actionId}`,
+                    { championId: candId, completed: true },
+                    onEnvelope
+                  ).catch(() => null);
+                  if (pickRes?.ok) {
+                    lockedPickChampionId = candId;
+                    unavailableIds.add(candId);
+                    executedActions.push(
+                      `[真机AutoPick] 拟人抖动 +${jitter}ms 后锁定英雄 ${getChampionMeta(candId).name}`
+                    );
+                    break;
+                  }
                 }
               }
             }
@@ -1829,12 +1923,13 @@ export async function fetchLiveSpectatorSession(
       if (bearerToken) {
         try {
           const sgpUrl = new URL(regConfig.matchHistoryUrl);
+          const sgpPort = sgpUrl.port ? Number.parseInt(sgpUrl.port, 10) : 443;
           const sgpPath = `/gsm/v1/ledge/spectator/region/${encodeURIComponent(
             regConfig.regionCode
           )}/puuid/${encodeURIComponent(targetPuuid)}`;
           const sgpRes = await performInsecureLocalHttps<any>({
             host: sgpUrl.hostname,
-            port: 443,
+            port: sgpPort,
             path: sgpPath,
             headers: { Authorization: `Bearer ${bearerToken}` },
             timeoutMs: 2500,
@@ -2116,15 +2211,9 @@ export async function fetchLiveSessionAndScoutProfiles(
     return { phase, profiles: null, timeline: null, aramSession };
   }
 
-  const roleOrder: RoleType[] = [
-    RoleType.TOP,
-    RoleType.JGL,
-    RoleType.MID,
-    RoleType.BOT,
-    RoleType.SUP,
-  ];
   const profiles: SummonerScoutProfile[] = [];
   let latestGameIdForTimeline: string | null = null;
+  let latestGameIsRedSide = false;
 
   const mapTeamMember = async (
     member: any,
@@ -2132,9 +2221,15 @@ export async function fetchLiveSessionAndScoutProfiles(
     teamSide: 'ALLY' | 'ENEMY'
   ): Promise<SummonerScoutProfile | null> => {
     const puuid = String(member?.puuid ?? '');
-    const assignedRole = roleOrder[idx % 5];
     const champId = Number(
       member?.championId || member?.championPickIntent || (idx === 1 ? 203 : 516)
+    );
+    const assignedRole = resolveLcuPositionToRole(
+      member?.assignedPosition || member?.selectedPosition || member?.role,
+      undefined,
+      undefined,
+      champId,
+      idx
     );
     const intentId = Number(member?.championPickIntent || champId);
     const champMeta = getChampionMeta(champId);
@@ -2184,6 +2279,17 @@ export async function fetchLiveSessionAndScoutProfiles(
 
     if (!latestGameIdForTimeline && rawGames[0]?.gameId) {
       latestGameIdForTimeline = String(rawGames[0].gameId);
+      const g0 = rawGames[0];
+      const ident0 = (g0.participantIdentities ?? []).find(
+        (idObj: any) => idObj?.player?.puuid === puuid
+      );
+      const part0 =
+        (g0.participants ?? []).find(
+          (p: any) =>
+            p.participantId === ident0?.participantId || p.puuid === puuid
+        ) ?? g0.participants?.[0];
+      latestGameIsRedSide =
+        Number(part0?.teamId) === 200 || Number(part0?.participantId) >= 6;
     }
 
     const perkTelemetry = extractPerkTelemetryFromRawGame(rawGames[0], puuid);
@@ -2259,7 +2365,11 @@ export async function fetchLiveSessionAndScoutProfiles(
       onEnvelope
     ).catch(() => null);
     if (tlRes?.ok && tlRes.data) {
-      const mappedTl = mapRawTimelineToMinutePoints(tlRes.data);
+      const mappedTl = mapRawTimelineToMinutePoints(
+        tlRes.data,
+        {},
+        latestGameIsRedSide
+      );
       if (mappedTl.length >= 5) {
         timeline = mappedTl;
       }

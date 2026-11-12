@@ -729,7 +729,11 @@ export function analyzeWinProbabilityAndThrows(
     const logit = normalizedGoldTerm + objectiveTerm + scalingTerm;
     const blueWinProbability = roundTo(clamp(1 / (1 + Math.exp(-logit)), 0.02, 0.98), 3);
 
-    const lookbackIdx = Math.max(0, i - 1);
+    // Walk backward to find a sample point at least 2 minutes earlier (supports both 1-min live LCU timelines and coarse replay frames)
+    let lookbackIdx = Math.max(0, i - 1);
+    while (lookbackIdx > 0 && pt.minute - timeline[lookbackIdx].minute < 2) {
+      lookbackIdx--;
+    }
     const prevProb = i === 0 ? 0.5 : winProbCurve[lookbackIdx].blueWinProbability;
     const probDelta2Min = roundTo(blueWinProbability - prevProb, 3);
     const isTurningPoint = Math.abs(probDelta2Min) >= 0.16 && Boolean(pt.eventSummary);
@@ -779,6 +783,14 @@ export function analyzeWinProbabilityAndThrows(
   return { winProbCurve, throwPoints };
 }
 
+const ROLE_DAMAGE_CONTRIBUTION_WEIGHT: Record<RoleType, number> = {
+  [RoleType.TOP]: 1.0,
+  [RoleType.JGL]: 0.85,
+  [RoleType.MID]: 1.3,
+  [RoleType.BOT]: 1.4,
+  [RoleType.SUP]: 0.25,
+};
+
 /**
  * 5. BP Team Composition 3D Damage Entropy & Frontline/CC Diagnosis
  */
@@ -809,19 +821,20 @@ export function diagnoseTeamComposition(allies: SummonerScoutProfile[]): TeamCom
   let scalingSum = 0;
 
   for (const p of allies) {
+    const roleWeight = ROLE_DAMAGE_CONTRIBUTION_WEIGHT[p.assignedRole] ?? 1.0;
     if (p.championDamageType === DamageType.PHYSICAL) {
-      adWeight += 0.85;
-      trueWeight += 0.15;
+      adWeight += roleWeight * 0.94;
+      trueWeight += roleWeight * 0.06;
     } else if (p.championDamageType === DamageType.MAGIC) {
-      apWeight += 0.88;
-      trueWeight += 0.12;
+      apWeight += roleWeight * 0.94;
+      trueWeight += roleWeight * 0.06;
     } else if (p.championDamageType === DamageType.TRUE) {
-      adWeight += 0.45;
-      trueWeight += 0.55;
+      adWeight += roleWeight * 0.55;
+      trueWeight += roleWeight * 0.45;
     } else {
-      adWeight += 0.45;
-      apWeight += 0.45;
-      trueWeight += 0.10;
+      adWeight += roleWeight * 0.46;
+      apWeight += roleWeight * 0.46;
+      trueWeight += roleWeight * 0.08;
     }
     frontlineSum += p.frontlineRating;
     ccSum += p.ccRating;
@@ -832,7 +845,7 @@ export function diagnoseTeamComposition(allies: SummonerScoutProfile[]): TeamCom
   const totalDmg = Math.max(0.01, adWeight + apWeight + trueWeight);
   const physicalRatio = roundTo(adWeight / totalDmg, 2);
   const magicRatio = roundTo(apWeight / totalDmg, 2);
-  const trueDamageRatio = roundTo(1 - physicalRatio - magicRatio, 2);
+  const trueDamageRatio = roundTo(Math.max(0, 1 - physicalRatio - magicRatio), 2);
 
   // Shannon Entropy H = -sum(p_i * log2(p_i))
   const probs = [physicalRatio, magicRatio, Math.max(0.01, trueDamageRatio)];
@@ -975,8 +988,12 @@ export function calculateDodgeExpectedValue(
     );
   }
 
+  const lpDiffText =
+    netLpAdvantageOfDodging >= 0
+      ? `且表面胜点期望少亏 ${netLpAdvantageOfDodging} LP`
+      : `虽表面多付 ${Math.abs(netLpAdvantageOfDodging)} LP 成本，但可 100% 规避隐藏分 MMR 下跌`;
   const headlineVerdict = shouldDodge
-    ? `强烈建议秒退 (Dodge) · 保住隐藏分且期望少亏 ${Math.abs(netLpAdvantageOfDodging)} LP`
+    ? `强烈建议秒退 (Dodge) · ${lpDiffText}`
     : `建议正常对局 (Play) · 当前阵容与队友状态具备正期望收益`;
 
   return {

@@ -298,6 +298,39 @@ function extractNativePerkTelemetry(st: any) {
   return items;
 }
 
+function resolveNativeLcuPositionToRole(
+  assignedPosition?: string,
+  timelineLane?: string,
+  timelineRole?: string,
+  fallbackChampId?: number,
+  fallbackIndex = 0
+): RoleType {
+  const pos = (assignedPosition || '').toUpperCase().trim();
+  if (pos === 'TOP') return RoleType.TOP;
+  if (pos === 'JUNGLE' || pos === 'JGL') return RoleType.JGL;
+  if (pos === 'MIDDLE' || pos === 'MID') return RoleType.MID;
+  if (pos === 'BOTTOM' || pos === 'BOT' || pos === 'ADC') return RoleType.BOT;
+  if (pos === 'UTILITY' || pos === 'SUPPORT' || pos === 'SUP') return RoleType.SUP;
+
+  const lane = (timelineLane || '').toUpperCase().trim();
+  const role = (timelineRole || '').toUpperCase().trim();
+  if (lane === 'TOP') return RoleType.TOP;
+  if (lane === 'JUNGLE') return RoleType.JGL;
+  if (lane === 'MIDDLE' || lane === 'MID') return RoleType.MID;
+  if (lane === 'BOTTOM' || lane === 'BOT') {
+    return role.includes('SUPPORT') ? RoleType.SUP : RoleType.BOT;
+  }
+  if (role === 'DUO_SUPPORT' || role === 'SUPPORT') return RoleType.SUP;
+  if (role === 'DUO_CARRY') return RoleType.BOT;
+
+  if (fallbackChampId && FULL_CHAMPION_CATALOG[fallbackChampId]) {
+    return FULL_CHAMPION_CATALOG[fallbackChampId].primaryRole;
+  }
+
+  const roleOrder = [RoleType.TOP, RoleType.JGL, RoleType.MID, RoleType.BOT, RoleType.SUP];
+  return roleOrder[fallbackIndex % 5];
+}
+
 function mapLcuMatchToPlayerStats(
   g: any,
   targetPuuid: string,
@@ -347,6 +380,12 @@ function mapLcuMatchToPlayerStats(
   const durationMinutes = Math.max(10, Math.round((Number(g.gameDuration) || 1500) / 60));
   const champId = Number(selfPart.championId) || 266;
   const champMeta = FULL_CHAMPION_CATALOG[champId];
+  const resolvedRole = resolveNativeLcuPositionToRole(
+    selfPart.assignedPosition || selfPart.selectedPosition,
+    selfPart.timeline?.lane || selfPart.lane,
+    selfPart.timeline?.role || selfPart.role,
+    champId
+  );
   const kills = Number(st.kills) || 0;
   const deaths = Number(st.deaths) || 0;
   const assists = Number(st.assists) || 0;
@@ -363,7 +402,7 @@ function mapLcuMatchToPlayerStats(
     championId: champId,
     championName: champMeta?.name || `英雄 #${champId}`,
     championTitle: champMeta?.title || '',
-    role: champMeta?.primaryRole || fallbackRole,
+    role: resolvedRole || fallbackRole,
     win: Boolean(st.win),
     kills,
     deaths,
@@ -552,30 +591,43 @@ export const tauriNativeEngine = {
         role: RoleType;
       }> = [];
 
-      const rolesOrder = [RoleType.TOP, RoleType.JGL, RoleType.MID, RoleType.BOT, RoleType.SUP];
       if (Array.isArray(csSession?.myTeam) && csSession.myTeam.length > 0) {
         csSession.myTeam.forEach((m: any, idx: number) => {
           if (m?.puuid) {
+            const cId = Number(m.championId || m.championPickIntent || 203);
             candidateSlots.push({
               puuid: String(m.puuid),
               gameName: m.gameName || m.summonerName || `我方队员 #${idx + 1}`,
               tagLine: m.tagLine || rustCreds.rsoPlatformId || 'CN1',
               teamSide: 'ALLY',
-              championId: Number(m.championId || m.championPickIntent || 203),
-              role: rolesOrder[idx % 5],
+              championId: cId,
+              role: resolveNativeLcuPositionToRole(
+                m.assignedPosition || m.selectedPosition || m.role,
+                undefined,
+                undefined,
+                cId,
+                idx
+              ),
             });
           }
         });
         if (Array.isArray(csSession?.theirTeam)) {
           csSession.theirTeam.forEach((m: any, idx: number) => {
             if (m?.puuid) {
+              const cId = Number(m.championId || 238);
               candidateSlots.push({
                 puuid: String(m.puuid),
                 gameName: m.gameName || m.summonerName || `敌方队员 #${idx + 1}`,
                 tagLine: m.tagLine || rustCreds.rsoPlatformId || 'CN1',
                 teamSide: 'ENEMY',
-                championId: Number(m.championId || 238),
-                role: rolesOrder[idx % 5],
+                championId: cId,
+                role: resolveNativeLcuPositionToRole(
+                  m.assignedPosition || m.selectedPosition || m.role,
+                  undefined,
+                  undefined,
+                  cId,
+                  idx
+                ),
               });
             }
           });
@@ -583,26 +635,40 @@ export const tauriNativeEngine = {
       } else if (Array.isArray(gfSession?.gameData?.teamOne)) {
         gfSession.gameData.teamOne.forEach((m: any, idx: number) => {
           if (m?.puuid) {
+            const cId = Number(m.championId || 203);
             candidateSlots.push({
               puuid: String(m.puuid),
               gameName: m.gameName || m.summonerName || `蓝方 #${idx + 1}`,
               tagLine: rustCreds.rsoPlatformId || 'CN1',
               teamSide: 'ALLY',
-              championId: Number(m.championId || 203),
-              role: rolesOrder[idx % 5],
+              championId: cId,
+              role: resolveNativeLcuPositionToRole(
+                m.assignedPosition || m.selectedPosition || m.role,
+                undefined,
+                undefined,
+                cId,
+                idx
+              ),
             });
           }
         });
         if (Array.isArray(gfSession?.gameData?.teamTwo)) {
           gfSession.gameData.teamTwo.forEach((m: any, idx: number) => {
             if (m?.puuid) {
+              const cId = Number(m.championId || 238);
               candidateSlots.push({
                 puuid: String(m.puuid),
                 gameName: m.gameName || m.summonerName || `红方 #${idx + 1}`,
                 tagLine: rustCreds.rsoPlatformId || 'CN1',
                 teamSide: 'ENEMY',
-                championId: Number(m.championId || 238),
-                role: rolesOrder[idx % 5],
+                championId: cId,
+                role: resolveNativeLcuPositionToRole(
+                  m.assignedPosition || m.selectedPosition || m.role,
+                  undefined,
+                  undefined,
+                  cId,
+                  idx
+                ),
               });
             }
           });
@@ -950,21 +1016,27 @@ export const tauriNativeEngine = {
     }
 
     if (params.action === 'REROLL' && !swapped) {
-      const allIds = ARAM_BALANCE_DATABASE.map((c) => c.championId);
+      const allIds = ALL_CHAMPIONS_SORTED.map((c) => c.id);
       const candidates = allIds.filter(
         (id) => id !== params.currentChampionId && !updatedBench.includes(id)
       );
       const rolledId = candidates[Math.floor(Math.random() * candidates.length)] ?? 202;
-      updatedBench = [rolledId, ...updatedBench].slice(0, 6);
-      const hitWish = nativeAutomation.aramWishlistChampionIds.find(
-        (wId) => updatedBench.includes(wId) && wId !== params.currentChampionId
-      );
-      if (hitWish) {
-        swapped = true;
-        newChampId = hitWish;
-        updatedBench = updatedBench.map((id) =>
-          id === hitWish ? params.currentChampionId : id
-        );
+      const oldHeldId = params.currentChampionId;
+      newChampId = rolledId;
+      swapped = true;
+      updatedBench = [oldHeldId, ...updatedBench].slice(0, 9);
+
+      if (nativeAutomation.aramBenchSniperEnabled) {
+        const currentWishRank = nativeAutomation.aramWishlistChampionIds.indexOf(newChampId);
+        const betterBenchWish = nativeAutomation.aramWishlistChampionIds.find((wId, idx) => {
+          if (currentWishRank !== -1 && idx >= currentWishRank) return false;
+          return updatedBench.includes(wId);
+        });
+        if (betterBenchWish) {
+          const tempHeld = newChampId;
+          newChampId = betterBenchWish;
+          updatedBench = updatedBench.map((id) => (id === betterBenchWish ? tempHeld : id));
+        }
       }
     } else if (params.targetChampionId && !swapped) {
       swapped = true;
@@ -1565,8 +1637,11 @@ export const tauriNativeEngine = {
           pickRate: Number((sp.pick_rate || 0).toFixed(4)),
           playCount: Number(sp.play) || 0,
         })),
-        strongAgainst: countersSorted.slice(0, 3),
-        weakAgainst: [...countersSorted].reverse().slice(0, 3),
+        strongAgainst: countersSorted.filter((c: any) => c.myWinRate >= 0.5).slice(0, 3),
+        weakAgainst: [...countersSorted]
+          .filter((c: any) => c.myWinRate < 0.5)
+          .reverse()
+          .slice(0, 3),
       };
 
       cachedExternalBuilds[cacheKey] = detail;

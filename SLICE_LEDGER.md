@@ -138,3 +138,14 @@
   - `/src-tauri/src/lcu_connector.rs` (提取 `build_wamp_tls_connector()`、显式注册 `rustls::crypto::ring::default_provider().install_default()`、使用 `.into_owned()` 消除 Clippy 警告并补充含空格 Windows 路径参数单元测试)
   - `/src-tauri/src/lib.rs` (消除 `inject_lcu_rune_page` 中嵌套 `if` 与 `.map(...).unwrap_or(false)` 以通过 `cargo clippy --all-targets -- -D warnings`)
   - `/src-tauri/src/sgp_client.rs`、`/src-tauri/Cargo.toml`
+
+### [x] `Slice-21`: 第二轮 8 项深层架构与协议边界 Bug 逐项修复及单元测试补强 (已完成 · 单元测试 9/9 全绿)
+- **包含文件**：
+  - `/src/core/mathEngine.ts` (修复 `diagnoseTeamComposition` 分位置伤害权重 `ROLE_DAMAGE_CONTRIBUTION_WEIGHT` 以消除“4 AD + 1 魔法坦辅”纯菜刀队漏报、修复 `analyzeWinProbabilityAndThrows` 1 分钟采样下 `>=2` 分钟累积葬送点回溯窗口、修复 `calculateDodgeExpectedValue` 负向净收益 `headlineVerdict` 文案符号颠倒)
+  - `/src/core/liveLcuAdapter.ts` (新增 `resolveLcuPositionToRole` 精准解析 `assignedPosition` 与 `timeline.lane + role`、修复 `executeLiveAutomationTick` 双遍 `unavailableIds` 收集 + `/lol-champ-select/v1/pickable-champion-ids` 校验与 `PATCH` 失败顺延循环、修复 `fetchLiveSpectatorSession` 国服 SGP `21019` 动态端口解析、修复 `mapRawTimelineToMinutePoints` 红方视角 `isRedSidePerspective` 镜像翻转)
+  - `/src-tauri/src/lib.rs` (在 `execute_champ_select_tick` 中拉取 `/lol-champ-select/v1/pickable-champion-ids` 并按 `for pick_id in candidates` 循环 `PATCH` 顺延备选英雄)
+  - `/src/bridge/tauriNativeEngine.ts` & `/server.ts` (修复 `REROLL` 覆盖全部 169 名英雄并遵循真实大乱斗“原持有英雄进入备选席 + 秒激活回滚锁”规则、对齐 `resolveNativeLcuPositionToRole` 与 OP.GG 克制胜率 `< 0.5` / `>= 0.5` 过滤)
+  - `/src/core/externalDataEngine.ts` (过滤 `strongAgainst` `myWinRate >= 0.5` 与 `weakAgainst` `myWinRate < 0.5` 防止样本较少时优势/劣势对位英雄重叠)
+  - `/src/components/ClientToolkitWorkspace.tsx` & `/src/App.tsx` (保留用户手动勾选的星界洞悉/明朗之靴状态不被 3.5s 轮询覆盖，并保持 `ClientToolkitWorkspace` 切换 Tab 时常驻挂载不重置闪现倒计时)
+  - `/src/core/mathEngine.test.ts` (新增 `Slice-1.9` 回归测试套件，`9/9` 测试用例通过)
+

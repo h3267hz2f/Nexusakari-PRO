@@ -261,23 +261,21 @@ pub async fn poll_live_client_2999(
             let has_ionian_boots = p
                 .get("items")
                 .and_then(|v| v.as_array())
-                .map(|items| {
+                .is_some_and(|items| {
                     items.iter().any(|item| {
                         item.get("itemID").and_then(|id| id.as_i64()) == Some(3158)
                     })
-                })
-                .unwrap_or(false);
+                });
 
             let has_cosmic_insight = p
                 .get("runes")
                 .and_then(|r| r.get("generalRunes"))
                 .and_then(|v| v.as_array())
-                .map(|runes| {
+                .is_some_and(|runes| {
                     runes
                         .iter()
                         .any(|r| r.get("id").and_then(|id| id.as_i64()) == Some(8347))
-                })
-                .unwrap_or(false);
+                });
 
             let (total_spell_haste, flash_real_cooldown_sec) =
                 calculate_spell_haste_cooldown(300, has_cosmic_insight, has_ionian_boots);

@@ -25,6 +25,7 @@ import {
   SGP_REGION_REGISTRY,
 } from './src/core/telemetryFixtures';
 import {
+  ALL_CHAMPIONS_SORTED,
   buildAdaptiveRunePresetForChampion,
   FULL_CHAMPION_CATALOG,
 } from './src/core/championCatalog';
@@ -834,7 +835,7 @@ async function startServer() {
       benchPoolIds: number[];
     };
 
-    const allAramIds = ARAM_BALANCE_DATABASE.map((c) => c.championId);
+    const allAramIds = ALL_CHAMPIONS_SORTED.map((c) => c.id);
     let updatedBench = Array.isArray(benchPoolIds) ? [...benchPoolIds] : [37, 115, 54];
     let newChampId = currentChampionId;
     let swapped = false;
@@ -880,24 +881,31 @@ async function startServer() {
     }
 
     if (action === 'REROLL') {
-      // Pick a random champion not currently held to simulate rolling into the bench
+      // 1. Use all 169 champions as the reroll pool
       const candidates = allAramIds.filter(
         (id) => id !== currentChampionId && !updatedBench.includes(id)
       );
       const rolledId =
         candidates[Math.floor(Math.random() * candidates.length)] ?? 202;
-      updatedBench = [rolledId, ...updatedBench].slice(0, 6);
 
-      // Check if rolled champion or any bench champion hits wishlist
+      // 2. Real ARAM rule: after rerolling, previously held champion moves to bench and player holds rolledId
+      const oldHeldId = currentChampionId;
+      newChampId = rolledId;
+      swapped = true;
+      updatedBench = [oldHeldId, ...updatedBench].slice(0, 9);
+
+      // 3. If bench sniper is enabled and bench contains a higher-priority wishlist champion than newChampId, snipe immediately
       if (automationConfig.aramBenchSniperEnabled) {
-        const hitWish = automationConfig.aramWishlistChampionIds.find((wId) =>
-          updatedBench.includes(wId) && wId !== currentChampionId
-        );
-        if (hitWish) {
-          swapped = true;
-          newChampId = hitWish;
+        const currentWishRank = automationConfig.aramWishlistChampionIds.indexOf(newChampId);
+        const betterBenchWish = automationConfig.aramWishlistChampionIds.find((wId, idx) => {
+          if (currentWishRank !== -1 && idx >= currentWishRank) return false;
+          return updatedBench.includes(wId);
+        });
+        if (betterBenchWish) {
+          const tempHeld = newChampId;
+          newChampId = betterBenchWish;
           updatedBench = updatedBench.map((id) =>
-            id === hitWish ? currentChampionId : id
+            id === betterBenchWish ? tempHeld : id
           );
         }
       }

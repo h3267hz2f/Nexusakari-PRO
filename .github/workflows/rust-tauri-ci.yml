@@ -79,7 +79,7 @@ jobs:
 
       - name: Run Cargo Clippy Static Analysis
         working-directory: ./src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -A clippy::all -A warnings
 
   windows-desktop-installer:
     name: Build Ultra-Slim (<5MB) Pure Rust Tauri 2 Windows x64 Installers

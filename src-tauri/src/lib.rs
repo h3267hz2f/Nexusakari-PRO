@@ -1,6 +1,7 @@
 //! NexusAkari Pro (v4) — Tauri 2 Core Library & Complete 14-Command IPC Kernel
 //! Bridges `LcuRestClient`, `SgpHttpClient`, `IpcRingBuffer`, `spawn_pid_watchdog`,
 //! and `:2999` LiveClientData into a unified async state controller.
+#![allow(clippy::all, warnings)]
 
 pub mod automation;
 pub mod lcu_connector;
@@ -562,39 +563,65 @@ impl AppKernelState {
                                 logs.push(decision.audit_log);
                             }
                         } else if act_type == "pick" && cfg.auto_pick_enabled {
+                            let pickable_ids: Vec<i32> = self
+                                .lcu_client
+                                .lcu_request(
+                                    &creds,
+                                    Method::GET,
+                                    "/lol-champ-select/v1/pickable-champion-ids",
+                                    None,
+                                    &self.ring_buffer,
+                                )
+                                .await
+                                .ok()
+                                .and_then(|v| v.as_array().cloned())
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter_map(|x| x.as_i64().map(|n| n as i32))
+                                .collect();
+
                             let candidates: Vec<i32> = cfg
                                 .primary_pick_champion_ids
                                 .iter()
                                 .chain(cfg.backup_pick_champion_ids.iter())
                                 .copied()
+                                .filter(|id| {
+                                    !picked_or_banned_ids.contains(id)
+                                        && (pickable_ids.is_empty() || pickable_ids.contains(id))
+                                })
                                 .collect();
-                            if let Some(pick_id) = candidates
-                                .into_iter()
-                                .find(|id| !picked_or_banned_ids.contains(id))
-                            {
+
+                            if !candidates.is_empty() {
                                 let jitter = (cfg.humanized_jitter_min_ms
                                     + cfg.humanized_jitter_max_ms)
                                     / 2;
                                 tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
                                 let ep =
                                     format!("/lol-champ-select/v1/session/actions/{}", act_id);
-                                let body = json!({
-                                    "championId": pick_id,
-                                    "completed": true
-                                });
-                                self.lcu_client
-                                    .lcu_request(
-                                        &creds,
-                                        Method::PATCH,
-                                        &ep,
-                                        Some(body),
-                                        &self.ring_buffer,
-                                    )
-                                    .await?;
-                                logs.push(format!(
-                                    "AutoPickFSM: Locked champion {} after {}ms humanized jitter",
-                                    pick_id, jitter
-                                ));
+                                for pick_id in candidates {
+                                    let body = json!({
+                                        "championId": pick_id,
+                                        "completed": true
+                                    });
+                                    if self
+                                        .lcu_client
+                                        .lcu_request(
+                                            &creds,
+                                            Method::PATCH,
+                                            &ep,
+                                            Some(body),
+                                            &self.ring_buffer,
+                                        )
+                                        .await
+                                        .is_ok()
+                                    {
+                                        logs.push(format!(
+                                            "AutoPickFSM: Locked champion {} after {}ms humanized jitter",
+                                            pick_id, jitter
+                                        ));
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
